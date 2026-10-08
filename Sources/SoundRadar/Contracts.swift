@@ -1,8 +1,8 @@
 import CoreAudio
 import Foundation
 
-// Seams between the parts of Sound Radar. Each lane implements one side;
-// the Null* types keep the app building and running until a real one lands.
+// Seams between the parts of Sound Radar: the model talks to audio and window
+// lookup only through these protocols.
 
 // MARK: - Per-app volume and loudness
 
@@ -30,19 +30,6 @@ protocol AudioMixing: AnyObject {
     func sync(_ sources: [AudioSource])
 }
 
-@MainActor
-final class NullMixer: AudioMixing {
-    private var volumes: [pid_t: Float] = [:]
-    private var muted: Set<pid_t> = []
-    var permission: CapturePermission { .unknown }
-    func requestPermission() {}
-    func volume(for app: pid_t) -> Float { volumes[app] ?? 1 }
-    func isMuted(_ app: pid_t) -> Bool { muted.contains(app) }
-    func setVolume(_ volume: Float, for app: pid_t) { volumes[app] = volume }
-    func setMuted(_ m: Bool, for app: pid_t) { if m { muted.insert(app) } else { muted.remove(app) } }
-    func level(for app: pid_t) -> Float { -120 }
-    func sync(_ sources: [AudioSource]) {}
-}
 
 // MARK: - Exact location of a sound
 
@@ -73,13 +60,3 @@ protocol SoundLocating: AnyObject {
     func jump(app: pid_t, bundleID: String?, to location: SourceLocation)
 }
 
-@MainActor
-final class NullLocator: SoundLocating {
-    var accessibilityGranted: Bool { false }
-    func requestAccessibility() {}
-    var screenRecordingGranted: Bool { false }
-    func requestScreenRecording() {}
-    var browserTabsEnabled = false
-    func locate(app: pid_t, bundleID: String?, helperPIDs: [pid_t]) async -> SourceLocation { SourceLocation() }
-    func jump(app: pid_t, bundleID: String?, to location: SourceLocation) {}
-}

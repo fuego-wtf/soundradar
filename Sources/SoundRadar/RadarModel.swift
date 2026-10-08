@@ -46,9 +46,9 @@ final class RadarModel {
     private var lastPlayed: [pid_t: Date] = [:]
     private var timer: Timer?
 
-    init(mixer: AudioMixing? = nil, locator: SoundLocating? = nil) {
-        self.mixer = mixer ?? NullMixer()
-        self.locator = locator ?? NullLocator()
+    init(mixer: AudioMixing, locator: SoundLocating) {
+        self.mixer = mixer
+        self.locator = locator
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
