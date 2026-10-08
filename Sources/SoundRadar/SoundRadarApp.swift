@@ -20,12 +20,18 @@ struct SoundRadarApp: App {
         .defaultSize(width: 980, height: 700)
         .windowToolbarStyle(.unified)
 
-        MenuBarExtra("Sound Radar", systemImage: "speaker.wave.2.fill") {
+        MenuBarExtra {
             MenuBarMixer(model: model) {
                 openWindow(id: "radar")
                 NSApplication.shared.activate()
             }
             .environment(solo)
+        } label: {
+            let count = model.playingApps.count
+            HStack(spacing: 3) {
+                Image(nsImage: makeMenuBarImage(waves: count > 0 ? 2 : 0, playing: count > 0))
+                if count > 0 { Text("\(count)") }
+            }
         }
         .menuBarExtraStyle(.window)
     }

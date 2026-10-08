@@ -7,8 +7,15 @@ swift build -c release
 BIN="$(swift build -c release --show-bin-path)/SoundRadar"
 APP="SoundRadar.app"
 
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/SoundRadar"
+# App icon: render the iconset with tools/make-icon.swift, then compile to .icns.
+ICONTMP="$(mktemp -d "${TMPDIR:-/tmp}/soundradar-icon.XXXXXX")"
+trap 'rm -rf "$ICONTMP"' EXIT
+swift tools/make-icon.swift "$ICONTMP/AppIcon.iconset"
+rm -f "$ICONTMP/AppIcon.iconset/AppIcon-1024.png"
+iconutil -c icns "$ICONTMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -16,6 +23,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
     <key>CFBundleName</key><string>Sound Radar</string>
     <key>CFBundleIdentifier</key><string>dev.local.soundradar</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleExecutable</key><string>SoundRadar</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
