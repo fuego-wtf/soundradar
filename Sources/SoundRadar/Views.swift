@@ -48,11 +48,13 @@ struct ContentView: View {
         HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 12) {
                 RadarMap(model: model) { selected = $0 }
+                    .frame(maxHeight: .infinity)
                 RecentSounds(model: model)
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             MixerColumn(model: model, selected: $selected)
                 .frame(width: 330)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
         .padding(16)
     }
@@ -96,8 +98,8 @@ struct RecentSounds: View {
     let model: RadarModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Recent sounds").font(.headline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Recent sounds").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             if model.history.isEmpty {
                 Text("Nothing yet.").font(.callout).foregroundStyle(.tertiary)
             } else {
@@ -105,7 +107,7 @@ struct RecentSounds: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(.horizontal, 12).padding(.vertical, 10)
         .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }

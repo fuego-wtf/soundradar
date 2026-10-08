@@ -54,7 +54,10 @@ struct VolumeSlider: View {
                 .frame(width: 40, alignment: .trailing)
         }
         .onAppear { volume = Double(model.mixer.volume(for: app.id)) }
-        .onChange(of: volume) { _, v in model.mixer.setVolume(Float(v), for: app.id) }
+        .onChange(of: volume) { _, v in
+            // Only write what differs, so a refresh from the mixer never echoes back.
+            if abs(model.mixer.volume(for: app.id) - Float(v)) > 0.0005 { model.mixer.setVolume(Float(v), for: app.id) }
+        }
         .onChange(of: model.lastScan) { _, _ in
             if !editing { volume = Double(model.mixer.volume(for: app.id)) }
         }
@@ -80,5 +83,33 @@ struct MuteButton: View {
         .help(muted ? "Unmute" : "Mute")
         .onAppear { muted = model.mixer.isMuted(app.id) }
         .onChange(of: model.lastScan) { _, _ in muted = model.mixer.isMuted(app.id) }
+    }
+}
+
+/// Master volume of the default output device. Same drag rule as `VolumeSlider`: no refresh while dragging.
+struct MasterVolumeSlider: View {
+    private let output = OutputDevice.shared
+    @State private var volume: Double = 0
+    @State private var editing = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: volume <= 0.001 ? "speaker.fill" : "speaker.wave.2.fill")
+                .foregroundStyle(.secondary).frame(width: 18)
+                .accessibilityHidden(true)
+            Slider(value: $volume, in: 0...1) { editing = $0 }
+                .controlSize(.small)
+                .disabled(!output.canSetVolume)
+                .accessibilityLabel("Master volume")
+                .accessibilityValue("\(Int((volume * 100).rounded())) percent")
+            Text(output.volume == nil ? "n/a" : "\(Int((volume * 100).rounded()))%")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+        .onAppear { volume = Double(output.volume ?? 0) }
+        .onChange(of: volume) { _, v in
+            if editing || abs(Float(v) - (output.volume ?? 0)) > 0.002 { output.setVolume(Float(v)) }
+        }
+        .onChange(of: output.volume) { _, v in if !editing { volume = Double(v ?? 0) } }
     }
 }

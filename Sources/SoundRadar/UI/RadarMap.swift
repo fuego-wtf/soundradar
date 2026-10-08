@@ -8,6 +8,8 @@ struct RadarMap: View {
     var body: some View {
         VStack(spacing: 8) {
             map
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.primary.opacity(0.03), in: .rect(cornerRadius: 18))
             OffDesktopChips(model: model)
         }
     }
@@ -18,11 +20,11 @@ struct RadarMap: View {
             if union.isNull {
                 Text("No displays").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                let pad: CGFloat = 12
-                let scale = min((geo.size.width - 2 * pad) / union.width,
-                                (geo.size.height - 2 * pad - 24) / union.height)
+                let pad: CGFloat = 16
+                let scale = max(0.01, min((geo.size.width - 2 * pad) / union.width,
+                                          (geo.size.height - 2 * pad) / union.height))
                 let offset = CGPoint(x: (geo.size.width - union.width * scale) / 2,
-                                     y: (geo.size.height - 24 - union.height * scale) / 2)
+                                     y: (geo.size.height - union.height * scale) / 2)
                 let map = { (r: CGRect) -> CGRect in
                     CGRect(x: (r.minX - union.minX) * scale + offset.x,
                            y: (r.minY - union.minY) * scale + offset.y,
@@ -69,10 +71,11 @@ struct RadarMap: View {
                             ForEach(playing) { app in
                                 if let w = primaryWindow(of: app) {
                                     let r = map(w.frame)
-                                    MapChip(title: app.chipTitle, live: app.isPlaying) { model.jump(to: app) }
-                                        .frame(maxWidth: max(120, min(260, geo.size.width * 0.4)))
-                                        .position(x: min(max(r.midX, 90), geo.size.width - 90),
-                                                  y: min(r.maxY + 16, geo.size.height - 40))
+                                    MapChip(title: app.chipTitle, subtitle: app.chipSubtitle(display: displayName(for: w)),
+                                            live: app.isPlaying) { model.jump(to: app) }
+                                        .frame(maxWidth: max(140, min(300, geo.size.width * 0.45)))
+                                        .position(x: min(max(r.midX, 110), geo.size.width - 110),
+                                                  y: min(max(r.maxY - 26, 34), geo.size.height - 34))
                                 }
                             }
                         }
@@ -82,7 +85,13 @@ struct RadarMap: View {
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             }
         }
-        .frame(minHeight: 200)
+        .frame(minHeight: 220)
+    }
+
+    private func displayName(for w: WindowBox) -> String? {
+        let c = CGPoint(x: w.frame.midX, y: w.frame.midY)
+        return (model.displays.first { $0.frame.contains(c) }
+                ?? model.displays.min { $0.frame.distance(to: c) < $1.frame.distance(to: c) })?.name
     }
 
     /// The located window if it is on screen, else the app's largest visible window.
@@ -119,22 +128,27 @@ struct SoundingWindow: View {
 
 struct MapChip: View {
     let title: String
+    var subtitle: String = ""
     let live: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: live ? "speaker.wave.2.fill" : "speaker.wave.1").foregroundStyle(Color.sound)
-                Text(title).lineLimit(1).truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
             }
-            .font(.caption.weight(.medium))
             .padding(.horizontal, 10).padding(.vertical, 5)
         }
         .buttonStyle(.plain)
         .fixedSize()
         .glassEffect(.regular.tint(.sound.opacity(0.25)).interactive(), in: .capsule)
-        .accessibilityLabel("\(title), go to source")
+        .accessibilityLabel("\(title), \(subtitle), go to source")
     }
 }
 
@@ -155,7 +169,7 @@ struct OffDesktopChips: View {
                         Button { model.jump(to: app) } label: {
                             HStack(spacing: 5) {
                                 Image(systemName: "rectangle.dashed")
-                                Text("\(app.name) · \(text)").lineLimit(1)
+                                Text("\(app.chipTitle) · \(text)").lineLimit(1).truncationMode(.middle)
                             }
                             .font(.caption.weight(.medium))
                             .padding(.horizontal, 10).padding(.vertical, 5)

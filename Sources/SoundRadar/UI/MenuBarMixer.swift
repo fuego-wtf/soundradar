@@ -14,6 +14,11 @@ struct MenuBarMixer: View {
                 Text(playing.isEmpty ? "Quiet" : "\(playing.count) playing")
                     .font(.caption).foregroundStyle(playing.isEmpty ? Color.secondary : Color.sound)
             }
+            HStack(spacing: 8) {
+                OutputDeviceChip().font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            MasterVolumeSlider()
             if playing.isEmpty {
                 Text("Nothing is playing sound.").font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
@@ -42,7 +47,6 @@ struct MenuBarMixer: View {
             }
             Divider()
             HStack {
-                OutputDeviceChip().foregroundStyle(.secondary)
                 Spacer()
                 Button("Open radar", action: openRadar).buttonStyle(.glass)
             }

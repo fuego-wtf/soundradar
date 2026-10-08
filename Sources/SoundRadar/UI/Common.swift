@@ -8,10 +8,15 @@ extension AppRow {
     /// Most specific human name of what is making the sound: tab, else window, else the app.
     var sourceTitle: String { location?.tabTitle ?? location?.windowTitle ?? name }
 
-    /// "App · tab/window title" for map chips.
+    /// "App · tab/window title", cut in the middle at about 40 characters.
     var chipTitle: String {
         let t = sourceTitle
-        return t == name ? name : "\(name) · \(t)"
+        return t == name ? name : "\(name) · \(t.middleTruncated(40))"
+    }
+
+    /// Display name and desktop status for the second chip line.
+    func chipSubtitle(display: String?) -> String {
+        [display, location?.space.detailText].compactMap { $0 }.joined(separator: " · ")
     }
 
     var isSounding: Bool { isPlaying || recentlyPlayed }
@@ -70,42 +75,16 @@ struct AppIconView: View {
     }
 }
 
-enum OutputDevice {
-    /// Name of the current default output device, read from Core Audio.
-    static func currentName() -> String? {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var device = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device) == noErr,
-              device != kAudioObjectUnknown else { return nil }
-        var nameAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var name: Unmanaged<CFString>?
-        var nsize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(device, &nameAddr, 0, nil, &nsize, &name) == noErr,
-              let name else { return nil }
-        return name.takeRetainedValue() as String
-    }
-}
-
-/// Output device chip; re-reads the device once a second so a switch shows up.
+/// Output device chip: name and an icon for how it is connected, live from `OutputDevice`.
 struct OutputDeviceChip: View {
-    @State private var name = OutputDevice.currentName()
+    private let output = OutputDevice.shared
 
     var body: some View {
-        Label(name ?? "No output", systemImage: "hifispeaker.fill")
+        Label(output.name ?? "No output", systemImage: output.transport.symbol)
             .font(.callout)
             .lineLimit(1)
-            .task {
-                while !Task.isCancelled {
-                    name = OutputDevice.currentName()
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            }
-            .accessibilityLabel("Output device \(name ?? "none")")
+            .help("\(output.transport.label) output")
+            .accessibilityLabel("Output device \(output.name ?? "none"), \(output.transport.label)")
     }
 }
 
@@ -137,4 +116,12 @@ final class SoloCoordinator {
 
 extension Color {
     static let sound = Color.orange
+}
+
+extension String {
+    func middleTruncated(_ limit: Int) -> String {
+        guard count > limit, limit > 2 else { return self }
+        let head = (limit - 1 + 1) / 2, tail = limit - 1 - head
+        return String(prefix(head)) + "…" + String(suffix(tail))
+    }
 }
