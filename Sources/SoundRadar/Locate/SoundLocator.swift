@@ -82,7 +82,11 @@ final class SoundLocator: SoundLocating {
             let script = BrowserScripts.selectTab(fam, url: url)
             Task { [jumpRunner] in _ = await jumpRunner.run(script, timeout: 1.5) }
         }
-        running?.activate(options: [.activateAllWindows])
+        if let running {
+            // macOS 14+ cooperative activation: hand activation over, or the request is ignored.
+            NSApplication.shared.yieldActivation(to: running)
+            running.activate(options: [.activateAllWindows])
+        }
         guard accessibilityGranted else { return }
         let wins = Self.axWindows(app)
         let title = location.windowTitle ?? location.tabTitle

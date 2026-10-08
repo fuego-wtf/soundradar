@@ -197,7 +197,10 @@ final class RadarModel {
     }
 
     func bringToFront(_ pid: pid_t) {
-        NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        // macOS 14+ cooperative activation: we must hand activation over, or the request is ignored.
+        NSApplication.shared.yieldActivation(to: app)
+        app.activate(options: [.activateAllWindows])
     }
 }
 
