@@ -71,11 +71,15 @@ struct RadarMap: View {
                             ForEach(playing) { app in
                                 if let w = primaryWindow(of: app) {
                                     let r = map(w.frame)
+                                    let chipW = max(140, min(300, geo.size.width * 0.45))
+                                    let halfW = min(chipW, 220) / 2 + 4   // chip is fixedSize; assume up to ~220pt wide
+                                    let small = r.width < 200 || r.height < 120
+                                    let cy = small ? r.maxY + 6 + 22 : r.maxY - 26
                                     MapChip(title: app.chipTitle, subtitle: app.chipSubtitle(display: displayName(for: w)),
                                             live: app.isPlaying) { model.jump(to: app) }
-                                        .frame(maxWidth: max(140, min(300, geo.size.width * 0.45)))
-                                        .position(x: min(max(r.midX, 110), geo.size.width - 110),
-                                                  y: min(max(r.maxY - 26, 34), geo.size.height - 34))
+                                        .frame(maxWidth: chipW)
+                                        .position(x: min(max(r.midX, halfW), max(halfW, geo.size.width - halfW)),
+                                                  y: min(max(cy, 30), geo.size.height - 30))
                                 }
                             }
                         }

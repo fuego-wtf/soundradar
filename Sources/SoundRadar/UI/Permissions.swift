@@ -55,7 +55,7 @@ struct PermissionsView: View {
     }
 }
 
-enum PermissionState { case on, off, denied, comingSoon }
+enum PermissionState { case on, off, denied }
 
 struct PermissionCard: View {
     let symbol: String
@@ -83,12 +83,6 @@ struct PermissionCard: View {
             case .denied:
                 Button("Open Settings", action: action).buttonStyle(.glass)
                     .accessibilityLabel("Open settings for \(title)")
-            case .comingSoon:
-                VStack(alignment: .trailing, spacing: 2) {
-                    Toggle("", isOn: .constant(false)).labelsHidden().disabled(true)
-                        .accessibilityLabel("\(title), coming soon")
-                    Text("Coming soon").font(.caption2).foregroundStyle(.secondary)
-                }
             }
         }
         .padding(14)

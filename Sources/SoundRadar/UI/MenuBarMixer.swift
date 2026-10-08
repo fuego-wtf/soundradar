@@ -19,6 +19,8 @@ struct MenuBarMixer: View {
                 Spacer(minLength: 0)
             }
             MasterVolumeSlider()
+            SoloBanner(model: model)
+            PermissionHint(model: model)
             if playing.isEmpty {
                 Text("Nothing is playing sound.").font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)

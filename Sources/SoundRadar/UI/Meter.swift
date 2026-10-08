@@ -17,12 +17,19 @@ struct LevelMeter: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 20)) { _ in
-            let lit = muted ? 0 : Self.litSegments(db: model.mixer.level(for: pid))
+            let allowed = model.volumeControlEnabled
+            let lit = (muted || !allowed) ? 0 : Self.litSegments(db: model.mixer.level(for: pid))
             HStack(spacing: 2) {
                 ForEach(0..<Self.segments, id: \.self) { i in
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(i < lit ? Self.color(i) : Color.primary.opacity(0.12))
                         .frame(width: segmentSize.width, height: segmentSize.height)
+                }
+            }
+            .opacity(allowed ? 1 : 0.4)
+            .overlay {
+                if !allowed {
+                    Text("needs permission").font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }
@@ -46,6 +53,7 @@ struct VolumeSlider: View {
             Slider(value: $volume, in: 0...1.5) { editing = $0 }
                 .tint(.sound)
                 .controlSize(.small)
+                .disabled(!model.volumeControlEnabled)
                 .accessibilityLabel("\(app.name) volume")
                 .accessibilityValue("\(Int((volume * 100).rounded())) percent")
             Text("\(Int((volume * 100).rounded()))%")
@@ -79,6 +87,7 @@ struct MuteButton: View {
         }
         .buttonStyle(.glass)
         .controlSize(.small)
+        .disabled(!model.volumeControlEnabled)
         .accessibilityLabel(muted ? "Unmute \(app.name)" : "Mute \(app.name)")
         .help(muted ? "Unmute" : "Mute")
         .onAppear { muted = model.mixer.isMuted(app.id) }

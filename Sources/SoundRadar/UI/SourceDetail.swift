@@ -45,6 +45,7 @@ struct SourceDetail: View {
                 Text("Volume").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 LevelMeter(model: model, pid: app.id)
                 VolumeSlider(app: app, model: model)
+                PermissionHint(model: model)
             }
 
             GlassEffectContainer(spacing: 8) {
@@ -54,10 +55,11 @@ struct SourceDetail: View {
                     }
                     .buttonStyle(.glassProminent).tint(.sound)
                     MuteButton(app: app, model: model)
-                    Button { solo.toggle(app.id, model: model) } label: {
+                    Button { solo.toggle(app, model: model) } label: {
                         Label(solo.soloed == app.id ? "Unsolo" : "Solo", systemImage: "headphones")
                     }
                     .buttonStyle(.glass)
+                    .disabled(!model.volumeControlEnabled)
                 }
             }
         }

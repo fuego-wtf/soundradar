@@ -5,11 +5,13 @@ struct MixerColumn: View {
     let model: RadarModel
     @Binding var selected: pid_t?
     @Namespace private var glassNS
+    @Environment(SoloCoordinator.self) private var solo
 
     var body: some View {
         let playing = model.playingApps
         VStack(alignment: .leading, spacing: 10) {
             Text("Mixer").font(.headline).foregroundStyle(.secondary)
+            SoloBanner(model: model)
             if let pid = selected, let app = model.apps.first(where: { $0.id == pid }) {
                 GlassEffectContainer(spacing: 12) {
                     SourceDetail(app: app, model: model) {
@@ -70,6 +72,7 @@ struct ChannelCard: View {
             }
             LevelMeter(model: model, pid: app.id, muted: muted)
             VolumeSlider(app: app, model: model)
+            PermissionHint(model: model)
         }
         .padding(12)
         .opacity(app.isPlaying ? 1 : 0.7)
