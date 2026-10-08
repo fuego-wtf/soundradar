@@ -17,3 +17,15 @@ Seams: `Sources/SoundRadar/Contracts.swift` (`AudioMixing`, `SoundLocating`). Th
 - A playing app shows its window and tab name and desktop; "Go to" brings that exact window or tab forward.
 - Each playing app has a live meter and a 0-150% volume slider that audibly changes it; mute works; volumes survive a device switch.
 - Builds clean with `./build.sh`; unit tests pass with `swift test`.
+
+## Completion plan (2026-10-08)
+
+State: L1-L3 merged and wired (`81d9b96`); `swift build` clean, 17 tests green, app runs. Not yet proven on live audio: needs the operator's permission grants.
+
+| Step | Owner | Work | Proof |
+|---|---|---|---|
+| 1 Live test | operator grants, L0 drives | slider 50/0/150 %, meter, mute, solo, output switch, Arc tab + Go to, other desktop, quit restores sound | screenshots + listening |
+| 2a Audio quality | lane LA | no click when leaving 100 % (stay in processing mode once touched), ramp from real sample rate, mic-skip test | `swift test`, mutation |
+| 2b Locator tests | lane LB | tests for window pick, desktop status, AppleScript escaping, tab reply parsing | `swift test`, mutation |
+| 2c Interface polish | lane LC | map fills the space, window/tab names in chips, output device name, master volume, off-desktop sources | build + screenshot |
+| 3 Close | L0 | two-pass review, `./build.sh`, tests, this file marked done | final screenshots |
