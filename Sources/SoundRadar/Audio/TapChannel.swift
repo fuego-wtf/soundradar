@@ -16,6 +16,8 @@ final class RTState: @unchecked Sendable {
     /// Input buffers that belong to the output device itself (for example a headset mic).
     /// The tap's buffers come after them; set before the IOProc starts, then read-only.
     var inputSkip = 0
+    /// Per-sample gain smoothing coefficient from the real sample rate; set before the IOProc starts.
+    var rampCoefficient: Float = MixerMath.gainRampCoefficient
     /// Touched by the audio thread only.
     private var gain: Float
 
@@ -63,7 +65,8 @@ final class RTState: @unchecked Sendable {
                     memset(optr, 0, Int(ob.mDataByteSize))
                 }
                 sumSq += MixerMath.render(input: iptr, inChannels: inCh, output: optr, outChannels: outCh,
-                                          frames: frames, gain: &gain, target: target)
+                                          frames: frames, gain: &gain, target: target,
+                                          coefficient: rampCoefficient)
                 count += frames * inCh
             }
             if outs.count == 0, let ins {
@@ -178,6 +181,7 @@ final class TapChannel: @unchecked Sendable {
 
         let rt = state
         rt.inputSkip = Self.inputBufferCount(deviceUID: outputUID)
+        rt.rampCoefficient = MixerMath.gainRampCoefficient(sampleRate: Self.nominalSampleRate(aggregateID))
         st = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { _, inData, _, outData, _ in
             rt.process(inData, outData)
         }
@@ -214,6 +218,16 @@ final class TapChannel: @unchecked Sendable {
             if s != noErr { mixerLog.error("DestroyProcessTap: \(s)") }
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
+    }
+
+    /// The aggregate device's real sample rate in Hz (0 when unreadable).
+    static func nominalSampleRate(_ device: AudioObjectID) -> Float {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var rate = Float64(0)
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate) == noErr else { return 0 }
+        return Float(rate)
     }
 
     /// How many input buffers the output device itself contributes to the aggregate.

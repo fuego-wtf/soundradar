@@ -107,6 +107,7 @@ final class AppAudioMixer: AudioMixing {
             destroyChannel(pid)
             lastActive[pid] = nil
             retryAfter[pid] = nil
+            processingPids.remove(pid)
             if kill(pid, 0) == -1 && errno == ESRCH { volumes[pid] = nil; muted.remove(pid) }
         }
         for pid in plan.rebuild {
@@ -121,13 +122,18 @@ final class AppAudioMixer: AudioMixing {
 
     // MARK: Channels
 
+    /// Apps whose channel has entered processing mode; they stay there until torn down.
+    private var processingPids = Set<pid_t>()
+
     private func gain(for pid: pid_t) -> Float {
         MixerMath.targetGain(volume: volume(for: pid), muted: isMuted(pid))
     }
 
     private func createChannel(_ pid: pid_t, objects: Set<AudioObjectID>, now: TimeInterval) {
         guard let uid = DefaultOutput.uid() else { retryAfter[pid] = now + Self.retryBackoff; return }
-        let processing = MixerMath.needsProcessing(volume: volume(for: pid), muted: isMuted(pid))
+        let processing = MixerMath.keepsProcessing(wasProcessing: processingPids.contains(pid),
+                                                    volume: volume(for: pid), muted: isMuted(pid))
+        if processing { processingPids.insert(pid) }
         let ch = TapChannel(kind: .processes(objects.sorted()), processing: processing, gain: gain(for: pid))
         do {
             try ch.start(outputUID: uid)
@@ -148,7 +154,7 @@ final class AppAudioMixer: AudioMixing {
 
     private func applySettings(_ pid: pid_t) {
         guard let ch = channels[pid] else { return }
-        let needs = MixerMath.needsProcessing(volume: volume(for: pid), muted: isMuted(pid))
+        let needs = MixerMath.keepsProcessing(wasProcessing: ch.processing, volume: volume(for: pid), muted: isMuted(pid))
         if needs != ch.processing {
             let objs = ch.objects
             destroyChannel(pid)

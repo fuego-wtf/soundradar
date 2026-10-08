@@ -10,8 +10,18 @@ enum MixerMath {
     static let maxGain: Float = 1.5
     /// Below this magnitude the limiter is the identity.
     static let limiterKnee: Float = 0.9
-    /// Per-sample one-pole coefficient for gain changes (about 10 ms at 48 kHz).
-    static let gainRampCoefficient: Float = 0.002
+    /// Time a gain change takes to settle to within 5 % of its target.
+    static let gainRampSeconds: Float = 0.02
+    static let defaultSampleRate: Float = 48_000
+    /// Per-sample one-pole coefficient for gain changes at the 48 kHz fallback rate.
+    static let gainRampCoefficient: Float = gainRampCoefficient(sampleRate: defaultSampleRate)
+
+    /// Per-sample one-pole coefficient so a step settles to within 5 % (e^-3) after `seconds`
+    /// at `sampleRate`. Falls back to 48 kHz for an unusable rate.
+    static func gainRampCoefficient(sampleRate: Float, seconds: Float = gainRampSeconds) -> Float {
+        let rate = (sampleRate.isFinite && sampleRate >= 8_000 && sampleRate <= 768_000) ? sampleRate : defaultSampleRate
+        return 1 - exp(-3 / (rate * seconds))
+    }
 
     // MARK: Metering
 
@@ -57,6 +67,12 @@ enum MixerMath {
         muted || clampVolume(volume) != 1
     }
 
+    /// Once a channel owns the audio (muted tap, re-rendered) it keeps doing so, even back at
+    /// exactly 100 % and unmuted: leaving processing mode would rebuild the tap and click.
+    static func keepsProcessing(wasProcessing: Bool, volume: Float, muted: Bool) -> Bool {
+        wasProcessing || needsProcessing(volume: volume, muted: muted)
+    }
+
     /// One per-sample step of the gain smoother; snaps to the target when very close.
     static func gainRamp(current: Float, target: Float, coefficient: Float = gainRampCoefficient) -> Float {
         let next = current + (target - current) * coefficient
@@ -79,12 +95,13 @@ enum MixerMath {
     /// input (pre-gain) for metering. `gain` is advanced in place.
     static func render(input: UnsafePointer<Float>, inChannels: Int,
                        output: UnsafeMutablePointer<Float>, outChannels: Int,
-                       frames: Int, gain: inout Float, target: Float) -> Float {
+                       frames: Int, gain: inout Float, target: Float,
+                       coefficient: Float = gainRampCoefficient) -> Float {
         var sumSq: Float = 0
         var g = gain
         var f = 0
         while f < frames {
-            g = gainRamp(current: g, target: target)
+            g = gainRamp(current: g, target: target, coefficient: coefficient)
             var c = 0
             while c < outChannels {
                 if c < inChannels {

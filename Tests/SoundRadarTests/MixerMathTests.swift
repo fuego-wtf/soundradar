@@ -74,6 +74,33 @@ final class MixerMathTests: XCTestCase {
         XCTAssertTrue(MixerMath.needsProcessing(volume: 1, muted: true))
     }
 
+    func testStaysInProcessingModeOnceEntered() {
+        // untouched channel stays a passive tap at exactly 100 %
+        XCTAssertFalse(MixerMath.keepsProcessing(wasProcessing: false, volume: 1, muted: false))
+        // leaving 100 % enters processing mode
+        XCTAssertTrue(MixerMath.keepsProcessing(wasProcessing: false, volume: 0.5, muted: false))
+        XCTAssertTrue(MixerMath.keepsProcessing(wasProcessing: false, volume: 1, muted: true))
+        // back at exactly 100 % and unmuted: still processing (no tap rebuild, no click)
+        XCTAssertTrue(MixerMath.keepsProcessing(wasProcessing: true, volume: 1, muted: false))
+    }
+
+    func testGainRampCoefficientSettlesIn20msAtEveryRate() {
+        for rate: Float in [44_100, 48_000, 96_000] {
+            let k = MixerMath.gainRampCoefficient(sampleRate: rate)
+            var g: Float = 0
+            let n = Int((rate * 0.02).rounded())
+            for _ in 0..<n { g = MixerMath.gainRamp(current: g, target: 1, coefficient: k) }
+            XCTAssertEqual(g, 1, accuracy: 0.05, "rate \(rate)")
+            XCTAssertLessThan(g, 0.99, "rate \(rate): ramp must not be instant")
+        }
+    }
+
+    func testGainRampCoefficientFallsBackForBadRate() {
+        let fallback = MixerMath.gainRampCoefficient(sampleRate: 48_000)
+        XCTAssertEqual(MixerMath.gainRampCoefficient(sampleRate: 0), fallback)
+        XCTAssertEqual(MixerMath.gainRampCoefficient(sampleRate: .nan), fallback)
+    }
+
     // MARK: limiter
 
     func testLimiterNeverExceedsOne() {
