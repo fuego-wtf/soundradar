@@ -27,7 +27,7 @@ final class SoundLocator: SoundLocating {
     private let runner = ScriptRunner()
     /// Own serial queue so a jump never waits behind lookups.
     private let jumpRunner = ScriptRunner()
-    private static let axTimeout: Float = 0.25
+    nonisolated private static let axTimeout: Float = 0.25
 
     // MARK: locate
 
