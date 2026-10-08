@@ -1,179 +1,167 @@
 import SwiftUI
 
+enum RadarTab: String, CaseIterable, Identifiable {
+    case radar = "Radar", history = "History", apps = "All apps"
+    var id: String { rawValue }
+}
+
 struct ContentView: View {
-    @State private var model = RadarModel()
+    let model: RadarModel
+    @AppStorage("onboarded") private var onboarded = false
+    @State private var tab: RadarTab = .radar
+    @State private var selected: pid_t?
+    @State private var showPermissions = false
 
     var body: some View {
-        VSplitView {
-            VStack(alignment: .leading, spacing: 8) {
-                header
-                DisplayMap(model: model)
-                    .frame(minHeight: 220)
+        Group {
+            switch tab {
+            case .radar: radar
+            case .history: HistoryList(model: model).padding(16)
+            case .apps: AllAppsList(model: model)
             }
-            .padding(12)
-
-            AppList(model: model)
-                .frame(minHeight: 200)
         }
-        .frame(minWidth: 720, minHeight: 600)
+        .frame(minWidth: 820, minHeight: 560)
+        .containerBackground(.thinMaterial, for: .window)
+        .toolbar {
+            ToolbarItem(placement: .navigation) { PlayingCapsule(model: model) }
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $tab) {
+                    ForEach(RadarTab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 280)
+            }
+            ToolbarItem(placement: .primaryAction) { OutputDeviceChip() }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showPermissions = true } label: { Image(systemName: "lock.shield") }
+                    .help("Permissions")
+                    .accessibilityLabel("Permissions")
+            }
+        }
+        .sheet(isPresented: $showPermissions, onDismiss: { onboarded = true }) {
+            PermissionsView(model: model) { showPermissions = false }
+        }
+        .onAppear { if !onboarded { showPermissions = true } }
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            let playing = model.playingApps
-            if playing.isEmpty {
-                Label("Nothing is playing sound", systemImage: "speaker.slash")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            } else {
-                Label(playing.map(\.name).joined(separator: ", "), systemImage: "speaker.wave.3.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
+    private var radar: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(spacing: 12) {
+                RadarMap(model: model) { selected = $0 }
+                RecentSounds(model: model)
             }
+            .frame(maxWidth: .infinity)
+            MixerColumn(model: model, selected: $selected)
+                .frame(width: 330)
+        }
+        .padding(16)
+    }
+}
+
+/// Header capsule: "N sources playing".
+struct PlayingCapsule: View {
+    let model: RadarModel
+
+    var body: some View {
+        let n = model.playingApps.count
+        Label(n == 0 ? "Quiet" : "\(n) source\(n == 1 ? "" : "s") playing",
+              systemImage: n == 0 ? "speaker.slash" : "speaker.wave.3.fill")
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(n == 0 ? Color.secondary : Color.sound)
+            .symbolEffect(.variableColor.iterative, options: .repeating, isActive: n > 0)
+            .accessibilityLabel(n == 0 ? "Nothing is playing" : "\(n) sources playing")
+    }
+}
+
+// MARK: - Recent sounds and history
+
+struct SoundEventRow: View {
+    let event: SoundEvent
+
+    var body: some View {
+        HStack {
+            Text(event.start, format: .dateTime.hour().minute().second())
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            Image(systemName: "speaker.wave.2").foregroundStyle(Color.sound)
+            Text(event.name).fontWeight(.medium)
+            Text(event.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
-            Toggle("Background apps", isOn: $model.showBackgroundApps)
-                .toggleStyle(.switch)
-                .controlSize(.small)
+            let secs = max(1, Int(event.end.timeIntervalSince(event.start).rounded()))
+            Text("\(secs)s").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
         }
     }
 }
 
-// MARK: - Display map
-
-struct DisplayMap: View {
+struct RecentSounds: View {
     let model: RadarModel
 
     var body: some View {
-        GeometryReader { geo in
-            let union = model.displays.reduce(CGRect.null) { $0.union($1.frame) }
-            if union.isNull {
-                Text("No displays").frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Recent sounds").font(.headline).foregroundStyle(.secondary)
+            if model.history.isEmpty {
+                Text("Nothing yet.").font(.callout).foregroundStyle(.tertiary)
             } else {
-                let pad: CGFloat = 8
-                let scale = min((geo.size.width - 2 * pad) / union.width,
-                                (geo.size.height - 2 * pad) / union.height)
-                let offset = CGPoint(x: (geo.size.width - union.width * scale) / 2,
-                                     y: (geo.size.height - union.height * scale) / 2)
-                let map = { (r: CGRect) -> CGRect in
-                    CGRect(x: (r.minX - union.minX) * scale + offset.x,
-                           y: (r.minY - union.minY) * scale + offset.y,
-                           width: r.width * scale, height: r.height * scale)
-                }
-                let playingPIDs = Set(model.playingApps.map(\.id))
-
-                ZStack(alignment: .topLeading) {
-                    ForEach(model.displays) { d in
-                        let r = map(d.frame)
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.primary.opacity(0.05))
-                            .overlay(RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.primary.opacity(d.isMain ? 0.5 : 0.25), lineWidth: 1))
-                            .overlay(alignment: .bottomLeading) {
-                                Text(d.isMain ? "\(d.name) (main)" : d.name)
-                                    .font(.caption2).foregroundStyle(.secondary).padding(4)
-                            }
-                            .frame(width: r.width, height: r.height)
-                            .offset(x: r.minX, y: r.minY)
-                    }
-                    // Quiet windows, faint, back to front.
-                    ForEach(model.allWindows.reversed().filter { !playingPIDs.contains($0.pid) }) { w in
-                        let r = map(w.frame)
-                        Rectangle().stroke(Color.primary.opacity(0.15), lineWidth: 0.5)
-                            .frame(width: r.width, height: r.height)
-                            .offset(x: r.minX, y: r.minY)
-                    }
-                    // Windows of apps that are making sound.
-                    ForEach(model.playingApps) { app in
-                        ForEach(app.windows) { w in
-                            let r = map(w.frame)
-                            SoundingWindow(app: app, live: app.isPlaying)
-                                .frame(width: r.width, height: r.height)
-                                .offset(x: r.minX, y: r.minY)
-                                .onTapGesture { model.bringToFront(app.id) }
-                                .help("\(app.name): click to bring to front")
-                        }
-                    }
-                }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                ForEach(model.history.prefix(4)) { SoundEventRow(event: $0) }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }
 
-struct SoundingWindow: View {
-    let app: AppRow
-    let live: Bool
-    @State private var pulse = false
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(Color.orange.opacity(live ? 0.35 : 0.15))
-            RoundedRectangle(cornerRadius: 3)
-                .stroke(Color.orange, lineWidth: 2)
-                .scaleEffect(pulse ? 1.12 : 1)
-                .opacity(pulse ? 0 : 1)
-            VStack(spacing: 2) {
-                if let icon = app.icon {
-                    Image(nsImage: icon).resizable().frame(width: 24, height: 24)
-                }
-                Image(systemName: live ? "speaker.wave.3.fill" : "speaker.wave.1")
-                    .foregroundStyle(.orange)
-            }
-        }
-        .onAppear {
-            withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) { pulse = true }
-        }
-    }
-}
-
-// MARK: - App list
-
-struct AppList: View {
+struct HistoryList: View {
     let model: RadarModel
 
     var body: some View {
-        List {
-            if !model.history.isEmpty {
-                Section("Recent sounds") {
-                    ForEach(model.history.prefix(8)) { e in
-                        HStack {
-                            Text(e.start, format: .dateTime.hour().minute().second())
-                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            Image(systemName: "speaker.wave.2").foregroundStyle(.orange)
-                            Text(e.name).fontWeight(.medium)
-                            Text(e.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            Spacer()
-                            let secs = max(1, Int(e.end.timeIntervalSince(e.start).rounded()))
-                            Text("\(secs)s").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
+        if model.history.isEmpty {
+            ContentUnavailableView("No sounds yet", systemImage: "clock",
+                                   description: Text("Every sound burst is listed here."))
+        } else {
+            List(model.history) { SoundEventRow(event: $0) }
+                .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+// MARK: - All apps
+
+struct AllAppsList: View {
+    @Bindable var model: RadarModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Apps (\(model.visibleApps.count))").font(.headline)
+                Spacer()
+                Toggle("Background apps", isOn: $model.showBackgroundApps)
+                    .toggleStyle(.switch).controlSize(.small)
             }
-            Section("Apps (\(model.visibleApps.count))") {
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            List {
                 ForEach(model.visibleApps) { app in
-                    AppRowView(app: app, location: model.whereIs(app)) { model.bringToFront(app.id) }
+                    AppRowView(app: app, location: model.whereLine(app)) { model.jump(to: app) }
                 }
-            }
-            if !model.orphans.isEmpty {
-                Section("Audio processes without an app") {
-                    ForEach(model.orphans, id: \.pid) { c in
-                        HStack {
-                            Image(systemName: c.isRunningOutput ? "speaker.wave.2" : "mic")
-                                .foregroundStyle(c.isRunningOutput ? .orange : .red)
-                                .frame(width: 24)
-                            VStack(alignment: .leading) {
-                                Text(c.executableName)
-                                Text(c.executablePath).font(.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).truncationMode(.middle)
+                if !model.orphans.isEmpty {
+                    Section("Audio processes without an app") {
+                        ForEach(model.orphans, id: \.pid) { c in
+                            HStack {
+                                Image(systemName: c.isRunningOutput ? "speaker.wave.2" : "mic")
+                                    .foregroundStyle(c.isRunningOutput ? Color.sound : .red)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading) {
+                                    Text(c.executableName)
+                                    Text(c.executablePath).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                                Spacer()
+                                Text("pid \(c.pid)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text("pid \(c.pid)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
         }
     }
 }
@@ -185,29 +173,29 @@ struct AppRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            if let icon = app.icon {
-                Image(nsImage: icon).resizable().frame(width: 24, height: 24)
-            } else {
-                Image(systemName: "app").frame(width: 24, height: 24)
-            }
+            AppIconView(app: app, size: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(app.name).fontWeight(app.isPlaying ? .semibold : .regular)
-                if app.isPlaying || app.recentlyPlayed || app.isRecording {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                if app.isSounding || app.isRecording {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer()
             if app.isRecording {
                 Image(systemName: "mic.fill").foregroundStyle(.red).help("Using audio input")
+                    .accessibilityLabel("Using audio input")
             }
             if app.isPlaying {
-                Image(systemName: "speaker.wave.3.fill").foregroundStyle(.orange)
+                Image(systemName: "speaker.wave.3.fill").foregroundStyle(Color.sound)
                     .symbolEffect(.variableColor.iterative, options: .repeating)
+                    .accessibilityLabel("Playing")
             } else if app.recentlyPlayed {
-                Image(systemName: "speaker.wave.1").foregroundStyle(.orange.opacity(0.6))
+                Image(systemName: "speaker.wave.1").foregroundStyle(Color.sound.opacity(0.6))
+                    .accessibilityLabel("Played recently")
             }
             Text("pid \(app.id)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-            Button("Show", action: activate).controlSize(.small)
+            Button("Show", action: activate).buttonStyle(.glass).controlSize(.small)
+                .accessibilityLabel("Show \(app.name)")
         }
         .padding(.vertical, 2)
     }
