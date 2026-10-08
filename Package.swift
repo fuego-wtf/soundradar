@@ -5,6 +5,7 @@ let package = Package(
     name: "SoundRadar",
     platforms: [.macOS("26.0")],
     targets: [
-        .executableTarget(name: "SoundRadar", path: "Sources/SoundRadar")
+        .executableTarget(name: "SoundRadar", path: "Sources/SoundRadar"),
+        .testTarget(name: "SoundRadarTests", dependencies: ["SoundRadar"], path: "Tests/SoundRadarTests"),
     ]
 )

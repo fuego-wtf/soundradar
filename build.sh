@@ -21,6 +21,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>LSMinimumSystemVersion</key><string>14.2</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSAudioCaptureUsageDescription</key><string>Sound Radar measures how loud each app is and sets per-app volume. Audio never leaves your Mac and is never recorded.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Sound Radar asks your browser which tab is open so it can show where a sound comes from and switch to it.</string>
 </dict>
 </plist>
 PLIST
