@@ -75,7 +75,9 @@ final class RadarModel {
 
         var unowned: [AudioClient] = []
         let now = Date()
-        for client in AudioScanner.scan() where client.isRunningOutput || client.isRunningInput {
+        // Our own taps make Sound Radar look like a player; never list ourselves.
+        let selfPID = ProcessInfo.processInfo.processIdentifier
+        for client in AudioScanner.scan() where (client.isRunningOutput || client.isRunningInput) && client.pid != selfPID {
             guard let owner = ProcessTree.owningApp(for: client.pid, apps: byPID),
                   var row = rows[owner.processIdentifier] else {
                 unowned.append(client)
