@@ -69,11 +69,15 @@ struct VolumeSlider: View {
     let model: RadarModel
     @State private var volume: Double = 1
     @State private var editing = false
+    @State private var editEndedAt: TimeInterval = -.infinity
 
     var body: some View {
         HStack(spacing: 8) {
             VolumeGate(model: model) { allowed in
-                Slider(value: $volume, in: 0...1.5) { editing = $0 }
+                Slider(value: $volume, in: 0...1.5) { isEditing in
+                    editing = isEditing
+                    if !isEditing { editEndedAt = ProcessInfo.processInfo.systemUptime }
+                }
                     .tint(.sound)
                     .controlSize(.small)
                     .disabled(!allowed)
@@ -87,11 +91,13 @@ struct VolumeSlider: View {
         }
         .onAppear { volume = Double(model.mixer.volume(for: app.id)) }
         .onChange(of: volume) { _, v in
-            // Only write what differs, so a refresh from the mixer never echoes back.
+            // Written through on every drag tick, no debounce. Only write what differs, so a
+            // refresh from the mixer never echoes back.
             if abs(model.mixer.volume(for: app.id) - Float(v)) > 0.0005 { model.mixer.setVolume(Float(v), for: app.id) }
         }
         .onScan(model) {
-            guard !editing else { return }
+            // Never re-sync while dragging or within 500 ms after, or the thumb jumps back.
+            guard !editing, ProcessInfo.processInfo.systemUptime - editEndedAt > 0.5 else { return }
             let v = Double(model.mixer.volume(for: app.id))
             if v != volume { volume = v }
         }

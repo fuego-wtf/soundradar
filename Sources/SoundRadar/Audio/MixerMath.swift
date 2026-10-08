@@ -62,6 +62,19 @@ enum MixerMath {
         muted ? 0 : clampVolume(volume)
     }
 
+    /// Slider position (0...1.5) to linear gain on an audio taper: quadratic up to 100 % (50 % is
+    /// -12 dB), then linear to 1.5x at 150 %. Continuous, monotonic, exactly unity at 1.
+    static func sliderToGain(_ position: Float) -> Float {
+        let p = clampVolume(position)
+        return p <= 1 ? p * p : p
+    }
+
+    /// Inverse of `sliderToGain`.
+    static func gainToSlider(_ gain: Float) -> Float {
+        let g = clampVolume(gain)
+        return g <= 1 ? g.squareRoot() : g
+    }
+
     /// A channel must own the audio (muted tap) only when the sound differs from the original.
     static func needsProcessing(volume: Float, muted: Bool) -> Bool {
         muted || clampVolume(volume) != 1
@@ -69,8 +82,11 @@ enum MixerMath {
 
     /// Once a channel owns the audio (muted tap, re-rendered) it keeps doing so, even back at
     /// exactly 100 % and unmuted: leaving processing mode would rebuild the tap and click.
-    static func keepsProcessing(wasProcessing: Bool, volume: Float, muted: Bool) -> Bool {
-        wasProcessing || needsProcessing(volume: volume, muted: muted)
+    /// With capture permission granted every channel starts in processing mode (muted tap,
+    /// re-rendered at gain 1), so a slider move only changes the atomic target gain.
+    static func keepsProcessing(wasProcessing: Bool, volume: Float, muted: Bool,
+                                permissionGranted: Bool = false) -> Bool {
+        permissionGranted || wasProcessing || needsProcessing(volume: volume, muted: muted)
     }
 
     /// One per-sample step of the gain smoother; snaps to the target when very close.

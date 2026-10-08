@@ -142,14 +142,16 @@ final class AppAudioMixer: AudioMixing {
         kill(pid, 0) == 0 || errno == EPERM
     }
 
+    /// The stored volume is a slider position; the channel gets the tapered gain.
     private func gain(for pid: pid_t) -> Float {
-        MixerMath.targetGain(volume: volume(for: pid), muted: isMuted(pid))
+        MixerMath.targetGain(volume: MixerMath.sliderToGain(volume(for: pid)), muted: isMuted(pid))
     }
 
     private func createChannel(_ pid: pid_t, objects: Set<AudioObjectID>, now: TimeInterval) {
         guard let uid = DefaultOutput.uid() else { retryAfter[pid] = now + Self.retryBackoff; return }
         let processing = MixerMath.keepsProcessing(wasProcessing: processingPids.contains(pid),
-                                                    volume: volume(for: pid), muted: isMuted(pid))
+                                                    volume: volume(for: pid), muted: isMuted(pid),
+                                                    permissionGranted: permission == .granted)
         if processing { processingPids.insert(pid) }
         let ch = TapChannel(kind: .processes(objects.sorted()), processing: processing, gain: gain(for: pid))
         do {
@@ -173,7 +175,8 @@ final class AppAudioMixer: AudioMixing {
 
     private func applySettings(_ pid: pid_t) {
         guard let ch = channels[pid] else { return }
-        let needs = MixerMath.keepsProcessing(wasProcessing: ch.processing, volume: volume(for: pid), muted: isMuted(pid))
+        let needs = MixerMath.keepsProcessing(wasProcessing: ch.processing, volume: volume(for: pid), muted: isMuted(pid),
+                                                permissionGranted: permission == .granted)
         if needs != ch.processing {
             let objs = ch.objects
             destroyChannel(pid)

@@ -84,6 +84,30 @@ final class MixerMathTests: XCTestCase {
         XCTAssertTrue(MixerMath.keepsProcessing(wasProcessing: true, volume: 1, muted: false))
     }
 
+    func testGrantedPermissionStartsEveryChannelInProcessing() {
+        XCTAssertTrue(MixerMath.keepsProcessing(wasProcessing: false, volume: 1, muted: false, permissionGranted: true))
+        XCTAssertFalse(MixerMath.keepsProcessing(wasProcessing: false, volume: 1, muted: false, permissionGranted: false))
+    }
+
+    func testSliderTaper() {
+        XCTAssertEqual(MixerMath.sliderToGain(0), 0)
+        XCTAssertEqual(MixerMath.sliderToGain(1), 1)
+        XCTAssertEqual(MixerMath.sliderToGain(0.5), 0.25, accuracy: 1e-6)
+        XCTAssertEqual(MixerMath.sliderToGain(1.5), 1.5, accuracy: 1e-6)
+        XCTAssertEqual(MixerMath.sliderToGain(9), 1.5, accuracy: 1e-6)
+        XCTAssertEqual(MixerMath.sliderToGain(-1), 0)
+        var prev: Float = -1
+        for i in 0...150 {
+            let g = MixerMath.sliderToGain(Float(i) / 100)
+            XCTAssertGreaterThan(g, prev, "strictly increasing at \(i)")
+            prev = g
+        }
+        for i in 0...150 {
+            let p = Float(i) / 100
+            XCTAssertEqual(MixerMath.gainToSlider(MixerMath.sliderToGain(p)), p, accuracy: 1e-4)
+        }
+    }
+
     func testGainRampCoefficientSettlesIn20msAtEveryRate() {
         for rate: Float in [44_100, 48_000, 96_000] {
             let k = MixerMath.gainRampCoefficient(sampleRate: rate)
