@@ -22,16 +22,23 @@ struct PermissionsView: View {
                             state: model.mixer.permission == .granted ? .on : (model.mixer.permission == .denied ? .denied : .off),
                             action: { model.mixer.requestPermission() })
                         PermissionCard(
-                            symbol: "macwindow", title: "Window names and jump to window",
-                            detail: "See which window plays, even on another desktop, and bring exactly that window forward.",
+                            symbol: "text.below.photo", title: "Window names, on every desktop",
+                            detail: "Name the exact window that plays, even when it sits on another desktop.",
+                            system: "macOS: Screen Recording (only window names are read, never the screen)",
+                            state: model.locator.screenRecordingGranted ? .on : .off,
+                            action: { model.locator.requestScreenRecording() })
+                        PermissionCard(
+                            symbol: "macwindow", title: "Jump to the window",
+                            detail: "Bring exactly that window forward, and un-minimize it.",
                             system: "macOS: Accessibility",
                             state: model.locator.accessibilityGranted ? .on : .off,
                             action: { model.locator.requestAccessibility() })
                         PermissionCard(
                             symbol: "safari", title: "Browser tabs",
-                            detail: "Name the tab that plays in Arc, Chrome or Safari, and switch to it.",
-                            system: "macOS: Automation, per browser",
-                            state: .comingSoon, action: {})
+                            detail: "Name the front tab in the playing Arc, Chrome or Safari window, and switch to it.",
+                            system: "macOS: Automation, asked once per browser",
+                            state: model.locator.browserTabsEnabled ? .on : .off,
+                            action: { model.locator.browserTabsEnabled = true })
                     }
                 }
             }

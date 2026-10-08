@@ -63,6 +63,11 @@ struct SourceLocation: Hashable, Sendable {
 protocol SoundLocating: AnyObject {
     var accessibilityGranted: Bool { get }
     func requestAccessibility()
+    /// Window names for every app, including other desktops.
+    var screenRecordingGranted: Bool { get }
+    func requestScreenRecording()
+    /// Opt-in: asking a browser for its tab triggers one Automation prompt per browser.
+    var browserTabsEnabled: Bool { get set }
     func locate(app: pid_t, bundleID: String?, helperPIDs: [pid_t]) async -> SourceLocation
     /// Brings the exact window (and browser tab, when known) to the front.
     func jump(app: pid_t, bundleID: String?, to location: SourceLocation)
@@ -72,6 +77,9 @@ protocol SoundLocating: AnyObject {
 final class NullLocator: SoundLocating {
     var accessibilityGranted: Bool { false }
     func requestAccessibility() {}
+    var screenRecordingGranted: Bool { false }
+    func requestScreenRecording() {}
+    var browserTabsEnabled = false
     func locate(app: pid_t, bundleID: String?, helperPIDs: [pid_t]) async -> SourceLocation { SourceLocation() }
     func jump(app: pid_t, bundleID: String?, to location: SourceLocation) {}
 }
