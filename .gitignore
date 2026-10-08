@@ -1,3 +1,4 @@
 .build/
 SoundRadar.app/
 .DS_Store
+*.dmg

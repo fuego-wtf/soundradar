@@ -8,6 +8,12 @@
 
 You hear a sound. Sound Radar tells you which app is playing it, which window and browser tab, on which screen and which desktop, and takes you there in one click. Then it hands you a fader for that app: 0 to 150 %, mute, or solo.
 
+## Download
+
+Get **[SoundRadar-1.0.0.dmg](https://github.com/fuego-wtf/soundradar/releases/latest)** from the latest release, open it and drag the speaker to Applications. It is signed by Fuego Labs LLC and notarized by Apple, so it opens without warnings. Requires macOS 26.
+
+<p align="center"><img src="docs/installer.png" width="560" alt="The Sound Radar installer window: drag the speaker to Applications, with pixel confetti"></p>
+
 ## What it does
 
 - **Finds every sound.** Lists each app whose audio output is running right now, including helper processes (browser tabs, Electron helpers, the iOS Simulator) mapped back to the app you recognise.
