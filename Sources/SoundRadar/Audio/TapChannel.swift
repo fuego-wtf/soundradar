@@ -13,6 +13,9 @@ final class RTState: @unchecked Sendable {
     private let callbacks = Atomic<Int>(0)
     private let failedBuffers = Atomic<Int>(0)
     let processing: Bool
+    /// Input buffers that belong to the output device itself (for example a headset mic).
+    /// The tap's buffers come after them; set before the IOProc starts, then read-only.
+    var inputSkip = 0
     /// Touched by the audio thread only.
     private var gain: Float
 
@@ -34,9 +37,11 @@ final class RTState: @unchecked Sendable {
         var count = 0
         let target = Float(bitPattern: targetBits.load(ordering: .relaxed))
 
-        let ins = inData.map { UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: $0)) }
+        let allIns = inData.map { UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: $0)) }
         let outs = outData.map { UnsafeMutableAudioBufferListPointer($0) }
-        let inCount = ins?.count ?? 0
+        let skip = min(inputSkip, allIns?.count ?? 0)
+        let inCount = (allIns?.count ?? 0) - skip
+        let ins: TapInputs? = allIns.map { TapInputs(list: $0, skip: skip) }
 
         if processing, let outs {
             for b in 0..<outs.count {
@@ -85,6 +90,18 @@ final class RTState: @unchecked Sendable {
         }
         let db = MixerMath.dBFS(sumSquares: sumSq, count: count)
         levelBits.store(db.bitPattern, ordering: .relaxed)
+    }
+}
+
+/// The tap's input buffers only, skipping the output device's own inputs (never play a mic back).
+struct TapInputs: Sequence {
+    let list: UnsafeMutableAudioBufferListPointer
+    let skip: Int
+    var count: Int { list.count - skip }
+    subscript(i: Int) -> AudioBuffer { list[i + skip] }
+    func makeIterator() -> AnyIterator<AudioBuffer> {
+        var i = skip
+        return AnyIterator { guard i < list.count else { return nil }; defer { i += 1 }; return list[i] }
     }
 }
 
@@ -160,6 +177,7 @@ final class TapChannel: @unchecked Sendable {
         }
 
         let rt = state
+        rt.inputSkip = Self.inputBufferCount(deviceUID: outputUID)
         st = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { _, inData, _, outData, _ in
             rt.process(inData, outData)
         }
@@ -196,6 +214,29 @@ final class TapChannel: @unchecked Sendable {
             if s != noErr { mixerLog.error("DestroyProcessTap: \(s)") }
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
+    }
+
+    /// How many input buffers the output device itself contributes to the aggregate.
+    static func inputBufferCount(deviceUID: String) -> Int {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var uid = deviceUID as CFString
+        var dev = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let st = withUnsafeMutablePointer(to: &uid) { p in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                       UInt32(MemoryLayout<CFString>.size), p, &size, &dev)
+        }
+        guard st == noErr, dev != kAudioObjectUnknown else { return 0 }
+        var cfg = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
+                                             mScope: kAudioObjectPropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
+        var bytes: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(dev, &cfg, 0, nil, &bytes) == noErr, bytes > 0 else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(bytes), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(dev, &cfg, 0, nil, &bytes, raw) == noErr else { return 0 }
+        let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        return list.count
     }
 
     private static func tapUID(_ tap: AudioObjectID) -> String? {

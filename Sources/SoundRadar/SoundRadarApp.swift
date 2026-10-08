@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct SoundRadarApp: App {
     // One model for the window and the menu bar extra.
-    @State private var model = RadarModel(locator: SoundLocator())
+    @State private var model = RadarModel(mixer: AppAudioMixer(), locator: SoundLocator())
     @State private var solo = SoloCoordinator()
     @Environment(\.openWindow) private var openWindow
 
