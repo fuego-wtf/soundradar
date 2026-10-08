@@ -301,15 +301,15 @@ extension View {
     func hoverHighlight(radius: CGFloat = 10) -> some View { modifier(HoverHighlight(radius: radius)) }
 }
 
-/// The mark; while `active` its wave count runs 0 to 3. Only this leaf redraws.
+/// The mark; while `active` its wave count runs 0 to 2. Only this leaf redraws.
 struct PulsingMark: View {
     let active: Bool
     var color: Color = .primary
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.3, paused: !active)) { tl in
-            let n = active ? Int(tl.date.timeIntervalSinceReferenceDate / 0.3) % 4 : 0
-            SoundRadarMark(waves: n, color: active ? Color.playing : color)
+            let n = active ? Int(tl.date.timeIntervalSinceReferenceDate / 0.3) % 3 : 0
+            SoundRadarMark(waves: n, monochrome: active ? nil : color)
         }
     }
 }
@@ -321,7 +321,7 @@ struct EmptyPoster: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            SoundRadarMark(waves: 0, color: .secondary).frame(width: 72, height: 72)
+            SoundRadarMark(waves: 0, monochrome: .secondary).frame(width: 72, height: 72)
             Text(title).font(.posterSmall(22)).multilineTextAlignment(.center)
             if let detail { Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center) }
         }

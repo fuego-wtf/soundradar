@@ -1,42 +1,30 @@
 // Renders the Sound Radar app icon PNGs. Usage: swift tools/make-icon.swift <outdir>
 // Writes AppIcon.iconset-style files (icon_16x16.png ... icon_512x512@2x.png) into <outdir>.
-// Geometry duplicated from Sources/SoundRadar/Brand/BrandMark.swift (this script cannot import the app).
-import CoreGraphics
+// import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-let slatW = 35.5556, slatH = 8.88891, slatR = 0.740743
-let arcs: [(CGPoint, CGPoint, CGFloat)] = [
-    (CGPoint(x: 28.9, y: 24.6), CGPoint(x: 30.4, y: 29.7), 15),
-    (CGPoint(x: 35.6, y: 21.3), CGPoint(x: 37.9, y: 28.9), 22.5),
-    (CGPoint(x: 42.3, y: 18.0), CGPoint(x: 45.3, y: 28.1), 30),
+// Geometry duplicated from Sources/SoundRadar/Brand/BrandMark.swift (PixelSpeaker).
+let speakerRows = [
+    "................",
+    "................",
+    ".......O........",
+    "......OO....O...",
+    ".....OPO.....O..",
+    "....OPLO..P...O.",
+    "OOOOPLLO...P..O.",
+    "OYYPLLYO...P...O",
+    "OYYPLLYO...P...O",
+    "OOOOPLLO...P..O.",
+    "....OPLO..P...O.",
+    ".....OPO.....O..",
+    "......OO....O...",
+    ".......O........",
+    "................",
+    "................",
 ]
-
-func slatsPath() -> CGPath {
-    let p = CGMutablePath()
-    func slat(_ y: CGFloat) -> CGRect { CGRect(x: 14, y: y, width: slatW, height: slatH) }
-    p.addRoundedRect(in: slat(43.1113), cornerWidth: slatR, cornerHeight: slatR)
-    p.addRoundedRect(in: slat(32.7402), cornerWidth: slatR, cornerHeight: slatR)
-    var t = CGAffineTransform(translationX: 14, y: 31).rotated(by: -34 * .pi / 180).translatedBy(x: -14, y: -31)
-    if let top = CGPath(roundedRect: slat(22.11), cornerWidth: slatR, cornerHeight: slatR, transform: nil).copy(using: &t) {
-        p.addPath(top)
-    }
-    return p
-}
-
-func arcPath(_ i: Int) -> CGPath {
-    let (f, to, r) = arcs[i]
-    let mid = CGPoint(x: (f.x + to.x) / 2, y: (f.y + to.y) / 2)
-    let dx = to.x - f.x, dy = to.y - f.y
-    let d = hypot(dx, dy)
-    let h = sqrt(max(r * r - d * d / 4, 0))
-    let c = CGPoint(x: mid.x - dy / d * h, y: mid.y + dx / d * h)
-    let p = CGMutablePath()
-    p.addArc(center: c, radius: r, startAngle: atan2(f.y - c.y, f.x - c.x),
-             endAngle: atan2(to.y - c.y, to.x - c.x), clockwise: false)
-    return p
-}
+let speakerColors: [Character: UInt32] = ["O": 0xFF5500, "P": 0xFF96D6, "L": 0xFFC0CF, "Y": 0xFFE27A]
 
 func rgb(_ hex: UInt32) -> CGColor {
     CGColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
@@ -83,14 +71,23 @@ func render(px: Int) -> CGImage {
     ctx.addPath(shape); ctx.setStrokeColor(rgb(0x141414)); ctx.setLineWidth(12); ctx.strokePath()
     // (stroke is centred on the edge; inner 6 px is the visible border)
 
-    // Mark: 64 units -> 640 px, centred on the tile.
-    let s: CGFloat = 10
+    // Speaker: integer cell size (40 px at 1024), rounded down at smaller sizes, centred.
+    // Work in device pixels so every cell rect lands on whole pixels.
+    ctx.interpolationQuality = .none
+    ctx.setShouldAntialias(false)
+    let cell = max(1, Int((CGFloat(px) * 40 / 1024).rounded(.down)))
+    let art = cell * 16
+    let origin = (px - art) / 2
     ctx.saveGState()
-    ctx.translateBy(x: 512 - 32 * s, y: 512 - 32 * s)
-    ctx.scaleBy(x: s, y: s)
-    ctx.setFillColor(rgb(0xF7F1E5)); ctx.addPath(slatsPath()); ctx.fillPath()
-    ctx.setStrokeColor(rgb(0xF7F1E5)); ctx.setLineWidth(2.6); ctx.setLineCap(.round)
-    for i in 0..<3 { ctx.addPath(arcPath(i)); ctx.strokePath() }
+    ctx.concatenate(ctx.ctm.inverted()) // device pixels
+    ctx.translateBy(x: 0, y: CGFloat(px)); ctx.scaleBy(x: 1, y: -1) // y-down
+    for (y, row) in speakerRows.enumerated() {
+        for (x, ch) in row.enumerated() {
+            guard let c = speakerColors[ch] else { continue }
+            ctx.setFillColor(rgb(c))
+            ctx.fill(CGRect(x: origin + x * cell, y: origin + y * cell, width: cell, height: cell))
+        }
+    }
     ctx.restoreGState()
     return ctx.makeImage()!
 }
