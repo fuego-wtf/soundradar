@@ -52,6 +52,7 @@ struct ContentView: View {
             PermissionsView(model: model) { showPermissions = false }
         }
         .onAppear { if !onboarded { showPermissions = true } }
+        .firstLaunchConfetti()
     }
 
     /// Chords live in real Buttons (always in the responder chain), not in commands.

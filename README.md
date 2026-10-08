@@ -32,6 +32,14 @@ cd soundradar
 
 `build.sh` builds a release binary with SwiftPM, generates the app icon, and assembles an ad-hoc signed `SoundRadar.app` next to the script.
 
+For a release build, set `SIGN_ID` (and optionally `VERSION`, default `1.0.0`). The app is then signed with a Developer ID identity, the hardened runtime, a secure timestamp and `SoundRadar.entitlements`, and checked with `codesign --verify` and `spctl`:
+
+```bash
+SIGN_ID="Developer ID Application: Fuego Labs LLC. (Q536K8BJ3W)" VERSION=1.0.0 ./build.sh
+```
+
+Notarize afterwards; until then `spctl` reports "Unnotarized Developer ID".
+
 Run the tests with:
 
 ```bash
