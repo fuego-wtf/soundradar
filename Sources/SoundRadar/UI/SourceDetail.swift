@@ -11,13 +11,14 @@ struct SourceDetail: View {
             HStack(spacing: 10) {
                 AppIconView(app: app, size: 36)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(app.name).font(.title3.weight(.semibold))
-                    Text(app.isPlaying ? "Playing now" : "Played a moment ago")
-                        .font(.caption).foregroundStyle(app.isPlaying ? Color.sound : .secondary)
+                    Text(app.name).font(.system(.title3, design: .rounded).weight(.semibold))
+                    Text(app.isPlaying ? "Playing now" : "Just heard")
+                        .font(.caption).foregroundStyle(app.isPlaying ? Color.playing : Color.justHeard)
                 }
                 Spacer()
                 Button(action: close) { Image(systemName: "xmark") }
                     .buttonStyle(.glass).controlSize(.small)
+                    .keyboardShortcut(.cancelAction)
                     .accessibilityLabel("Back to radar")
             }
 
@@ -51,9 +52,10 @@ struct SourceDetail: View {
                     Button { model.jump(to: app) } label: {
                         Label(app.location?.tabTitle != nil ? "Go to tab" : "Go to", systemImage: "arrow.up.forward.app")
                     }
-                    .buttonStyle(.glassProminent).tint(.sound)
-                    MuteButton(app: app, model: model)
-                    SoloButton(app: app, model: model)
+                    .buttonStyle(.glassProminent).tint(.playing)
+                    .keyboardShortcut(.return, modifiers: [])
+                    MuteControl(app: app, model: model, showsTitle: true)
+                    SoloButton(app: app, model: model, showsTitle: true)
                 }
             }
         }
@@ -87,15 +89,26 @@ struct SourceDetail: View {
 struct SoloButton: View {
     let app: AppRow
     let model: RadarModel
+    var showsTitle = false
     @Environment(SoloCoordinator.self) private var solo
 
     var body: some View {
         VolumeGate(model: model) { allowed in
+            let on = solo.soloed == app.id
             Button { solo.toggle(app, model: model) } label: {
-                Label(solo.soloed == app.id ? "Unsolo" : "Solo", systemImage: "headphones")
+                if showsTitle {
+                    Label(on ? "Unsolo" : "Solo", systemImage: "headphones")
+                } else {
+                    Image(systemName: "headphones").frame(width: 16, height: 16)
+                }
             }
             .buttonStyle(.glass)
+            .controlSize(.small)
+            .tint(on ? Color.playing : nil)
+            .foregroundStyle(on ? Color.playing : Color.primary)
             .disabled(!allowed)
+            .accessibilityLabel(on ? "End solo for \(app.name)" : "Solo \(app.name)")
+            .help(on ? "End solo (S)" : "Solo (S)")
         }
     }
 }
@@ -140,7 +153,7 @@ struct HistoryBars: View {
                 let h = max(2, size.height * frac)
                 let x = size.width - CGFloat(n - i) * (barW + gap) + gap
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: size.height - h, width: barW, height: h), cornerRadius: 1),
-                         with: .color(Color.sound.opacity(0.35 + 0.65 * frac)))
+                         with: .color((frac > 0.85 ? Color.muted : (frac > 0.7 ? Color.justHeard : Color.playing)).opacity(0.35 + 0.65 * frac)))
             }
         }
         .task(id: pid) {

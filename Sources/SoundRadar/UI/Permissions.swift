@@ -46,7 +46,7 @@ struct PermissionsView: View {
                 Label("Nothing leaves your Mac. Sound is measured, never recorded.", systemImage: "lock.fill")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Done", action: done).buttonStyle(.glassProminent).tint(.sound)
+                Button("Done", action: done).buttonStyle(.glassProminent).tint(.playing)
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -67,7 +67,7 @@ struct PermissionCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: symbol).font(.title2).foregroundStyle(Color.sound).frame(width: 32)
+            Image(systemName: symbol).font(.title2).foregroundStyle(Color.needsPermission).frame(width: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.headline)
                 Text(detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -76,9 +76,9 @@ struct PermissionCard: View {
             Spacer(minLength: 8)
             switch state {
             case .on:
-                Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout.weight(.medium))
+                Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(Color.playing).font(.callout.weight(.medium))
             case .off:
-                Button("Turn on", action: action).buttonStyle(.glassProminent).tint(.sound)
+                Button("Turn on", action: action).buttonStyle(.glassProminent).tint(.needsPermission)
                     .accessibilityLabel("Turn on \(title)")
             case .denied:
                 Button("Open Settings", action: action).buttonStyle(.glass)

@@ -1,14 +1,13 @@
 import SwiftUI
 
-/// 20 segments, -60...0 dBFS, green then orange then red. Level -120 (silence or unknown) lights nothing.
-/// Only the Canvas sits inside the 20 Hz timeline; nothing else is re-evaluated per frame.
+/// 24 thin segments, -60...0 dBFS, green then yellow then red. Level -120 (silence or unknown) lights
+/// nothing. Only the Canvas sits inside the 30 fps timeline, and it pauses when its card is off screen.
 struct LevelMeter: View {
     let model: RadarModel
     let pid: pid_t
-    var segmentSize = CGSize(width: 6, height: 10)
 
-    static let segments = 20
-    private static let gap: CGFloat = 2
+    static let segments = 24
+    static let height: CGFloat = 4
 
     static func litSegments(db: Float) -> Int {
         guard db > -60 else { return 0 }
@@ -16,58 +15,51 @@ struct LevelMeter: View {
         return max(1, Int((frac * Float(segments)).rounded(.up)))
     }
 
+    static func color(_ i: Int) -> Color {
+        i < 16 ? .playing : (i < 21 ? .justHeard : .muted)
+    }
+
     var body: some View {
         VolumeGate(model: model) { allowed in
-            MeterBars(model: model, pid: pid, active: allowed, segmentSize: segmentSize)
-                .opacity(allowed ? 1 : 0.4)
-                .overlay {
-                    if !allowed {
-                        Text("needs permission").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
+            MeterBars(model: model, pid: pid, active: allowed)
         }
+        .frame(height: Self.height)
         .accessibilityHidden(true)
     }
-
-    static func color(_ i: Int) -> Color {
-        i < 12 ? .green : (i < 17 ? .orange : .red)
-    }
-
-    fileprivate static func width(for size: CGSize) -> CGFloat {
-        CGFloat(segments) * size.width + CGFloat(segments - 1) * gap
-    }
-    fileprivate static var spacing: CGFloat { gap }
 }
 
 private struct MeterBars: View {
     let model: RadarModel
     let pid: pid_t
     let active: Bool
-    let segmentSize: CGSize
+    @State private var onScreen = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20)) { timeline in
-            Canvas { ctx, _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !onScreen)) { timeline in
+            Canvas { ctx, size in
                 _ = timeline.date
+                let n = LevelMeter.segments
+                let gap: CGFloat = 2
+                let w = max(1, (size.width - gap * CGFloat(n - 1)) / CGFloat(n))
                 let lit = (active && !model.mixer.isMuted(pid))
                     ? LevelMeter.litSegments(db: model.mixer.level(for: pid)) : 0
-                for i in 0..<LevelMeter.segments {
-                    let x = CGFloat(i) * (segmentSize.width + LevelMeter.spacing)
-                    let rect = CGRect(x: x, y: 0, width: segmentSize.width, height: segmentSize.height)
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5),
-                             with: .color(i < lit ? LevelMeter.color(i) : Color.primary.opacity(0.12)))
+                let off = active ? Color.primary.opacity(0.12) : Color.needsPermission.opacity(0.3)
+                for i in 0..<n {
+                    let rect = CGRect(x: CGFloat(i) * (w + gap), y: 0, width: w, height: size.height)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(i < lit ? LevelMeter.color(i) : off))
                 }
             }
         }
-        .frame(width: LevelMeter.width(for: segmentSize), height: segmentSize.height)
+        .onAppear { onScreen = true }
+        .onDisappear { onScreen = false }
     }
 }
 
-/// Slider 0...150 % bound to the mixer. Keeps a local copy because the mixer is not observable.
-struct VolumeSlider: View {
+/// Slider 0...150 % on a binding the owner holds, so keys and the slider share one value.
+struct VolumeControl: View {
     let app: AppRow
     let model: RadarModel
-    @State private var volume: Double = 1
+    @Binding var volume: Double
     @State private var editing = false
     @State private var editEndedAt: TimeInterval = -.infinity
 
@@ -78,20 +70,20 @@ struct VolumeSlider: View {
                     editing = isEditing
                     if !isEditing { editEndedAt = ProcessInfo.processInfo.systemUptime }
                 }
-                    .tint(.sound)
-                    .controlSize(.small)
-                    .disabled(!allowed)
-                    .accessibilityLabel("\(app.name) volume")
-                    .accessibilityValue("\(Int((volume * 100).rounded())) percent")
+                .tint(.playing)
+                .controlSize(.small)
+                .disabled(!allowed)
+                .accessibilityLabel("\(app.name) volume")
+                .accessibilityValue("\(Int((volume * 100).rounded())) percent")
             }
             Text("\(Int((volume * 100).rounded()))%")
-                .font(.caption.monospacedDigit())
+                .font(.num(12))
                 .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .trailing)
+                .frame(width: 42, alignment: .trailing)
         }
         .onAppear { volume = Double(model.mixer.volume(for: app.id)) }
         .onChange(of: volume) { _, v in
-            // Written through on every drag tick, no debounce. Only write what differs, so a
+            // Written through on every change, no debounce. Only write what differs, so a
             // refresh from the mixer never echoes back.
             if abs(model.mixer.volume(for: app.id) - Float(v)) > 0.0005 { model.mixer.setVolume(Float(v), for: app.id) }
         }
@@ -104,28 +96,43 @@ struct VolumeSlider: View {
     }
 }
 
+/// `VolumeControl` that owns its value (detail view, menu bar).
+struct VolumeSlider: View {
+    let app: AppRow
+    let model: RadarModel
+    @State private var volume: Double = 1
+
+    var body: some View { VolumeControl(app: app, model: model, volume: $volume) }
+}
+
+/// Glass mute button on a binding; red when muted.
 struct MuteButton: View {
     let app: AppRow
     let model: RadarModel
-    @State private var muted = false
+    @Binding var muted: Bool
+    var showsTitle = false
 
     var body: some View {
         VolumeGate(model: model) { allowed in
-            Button {
-                muted.toggle()
-                model.mixer.setMuted(muted, for: app.id)
-            } label: {
-                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .frame(width: 18, height: 18)
-                    .padding(6)
-                    .background(.quaternary, in: .circle)
+            Button { muted.toggle() } label: {
+                if showsTitle {
+                    Label(muted ? "Unmute" : "Mute", systemImage: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                } else {
+                    Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 16, height: 16)
+                }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .tint(muted ? Color.muted : nil)
+            .foregroundStyle(muted ? Color.muted : Color.primary)
             .disabled(!allowed)
             .accessibilityLabel(muted ? "Unmute \(app.name)" : "Mute \(app.name)")
-            .help(muted ? "Unmute" : "Mute")
+            .help(muted ? "Unmute (M)" : "Mute (M)")
         }
         .onAppear { muted = model.mixer.isMuted(app.id) }
+        .onChange(of: muted) { _, m in
+            if model.mixer.isMuted(app.id) != m { model.mixer.setMuted(m, for: app.id) }
+        }
         .onScan(model) {
             let m = model.mixer.isMuted(app.id)
             if m != muted { muted = m }
@@ -133,7 +140,17 @@ struct MuteButton: View {
     }
 }
 
-/// Master volume of the default output device. Same drag rule as `VolumeSlider`: no refresh while dragging.
+/// `MuteButton` that owns its state (detail view, menu bar).
+struct MuteControl: View {
+    let app: AppRow
+    let model: RadarModel
+    var showsTitle = false
+    @State private var muted = false
+
+    var body: some View { MuteButton(app: app, model: model, muted: $muted, showsTitle: showsTitle) }
+}
+
+/// Master volume of the default output device. Same drag rule as `VolumeControl`: no refresh while dragging.
 struct MasterVolumeSlider: View {
     private let output = OutputDevice.shared
     @State private var volume: Double = 0
@@ -145,13 +162,14 @@ struct MasterVolumeSlider: View {
                 .foregroundStyle(.secondary).frame(width: 18)
                 .accessibilityHidden(true)
             Slider(value: $volume, in: 0...1) { editing = $0 }
+                .tint(.playing)
                 .controlSize(.small)
                 .disabled(!output.canSetVolume)
                 .accessibilityLabel("Master volume")
                 .accessibilityValue("\(Int((volume * 100).rounded())) percent")
             Text(output.volume == nil ? "n/a" : "\(Int((volume * 100).rounded()))%")
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .trailing)
+                .font(.num(12)).foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
         }
         .onAppear { volume = Double(output.volume ?? 0) }
         .onChange(of: volume) { _, v in

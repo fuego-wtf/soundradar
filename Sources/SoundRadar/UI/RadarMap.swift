@@ -28,6 +28,7 @@ struct MapGeometry: Equatable {
 /// Displays and windows to scale. The window that plays glows strongest and carries a glass label chip.
 /// Quiet windows and display outlines are one Canvas; only the sounding windows are real views.
 struct RadarMap: View {
+    @Environment(\.displayScale) private var displayScale
     let model: RadarModel
     /// Sounding sources, computed once by the parent.
     let playing: [AppRow]
@@ -37,7 +38,6 @@ struct RadarMap: View {
         VStack(spacing: 8) {
             map
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.primary.opacity(0.03), in: .rect(cornerRadius: 18))
             OffDesktopChips(model: model, playing: playing)
         }
     }
@@ -48,13 +48,14 @@ struct RadarMap: View {
                 let playingPIDs = Set(playing.map(\.id))
                 ZStack(alignment: .topLeading) {
                     MapBackdrop(geometry: g, displays: model.displays,
-                                windows: model.allWindows.filter { !playingPIDs.contains($0.pid) })
+                                windows: model.allWindows.filter { !playingPIDs.contains($0.pid) },
+                                scale: displayScale)
                         .equatable()
                     SoundingLayer(model: model, playing: playing, displays: model.displays, geometry: g)
                 }
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             } else {
-                Text("No displays").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyPoster(title: "No displays found").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(minHeight: 220)
@@ -66,22 +67,24 @@ struct MapBackdrop: View, Equatable {
     let geometry: MapGeometry
     let displays: [DisplayBox]
     let windows: [WindowBox]
+    let scale: CGFloat
 
     var body: some View {
         Canvas { ctx, _ in
             let ink = Color.primary
+            let hair = 1 / max(1, scale)
             for d in displays {
-                let r = geometry.rect(d.frame)
-                let shape = Path(roundedRect: r, cornerRadius: 8)
-                ctx.fill(shape, with: .color(ink.opacity(0.06)))
-                ctx.stroke(shape, with: .color(ink.opacity(d.isMain ? 0.45 : 0.22)), lineWidth: 1)
+                let r = pixelAligned(geometry.rect(d.frame), scale: scale)
+                let shape = Path(roundedRect: r, cornerRadius: 10)
+                ctx.fill(shape, with: .color(ink.opacity(0.025)))
+                ctx.stroke(shape, with: .color(ink.opacity(d.isMain ? 0.55 : 0.28)), lineWidth: hair)
                 let label = ctx.resolve(Text(d.isMain ? "\(d.name) (main)" : d.name)
-                    .font(.caption2).foregroundStyle(.secondary))
+                    .font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary))
                 ctx.draw(label, at: CGPoint(x: r.minX + 6, y: r.minY + 6), anchor: .topLeading)
             }
             for w in windows.reversed() {
-                ctx.stroke(Path(roundedRect: geometry.rect(w.frame), cornerRadius: 3),
-                           with: .color(ink.opacity(0.14)), lineWidth: 0.5)
+                ctx.stroke(Path(roundedRect: pixelAligned(geometry.rect(w.frame), scale: scale), cornerRadius: 3),
+                           with: .color(ink.opacity(0.13)), lineWidth: hair)
             }
         }
         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -153,23 +156,25 @@ struct SoundingWindow: View {
     let strongest: Bool
 
     var body: some View {
+        let tone: Color = live ? .playing : .justHeard
         let base = strongest ? (live ? 0.42 : 0.2) : (live ? 0.14 : 0.07)
         ZStack {
-            RoundedRectangle(cornerRadius: 4).fill(Color.sound.opacity(base))
-            RoundedRectangle(cornerRadius: 4).stroke(Color.sound.opacity(strongest ? 1 : 0.45), lineWidth: strongest ? 2 : 1)
-            if strongest && live { PulseRing() }
+            RoundedRectangle(cornerRadius: 4).fill(tone.opacity(base))
+            RoundedRectangle(cornerRadius: 4).stroke(tone.opacity(strongest ? 1 : 0.45), lineWidth: strongest ? 2 : 1)
+            if strongest && live { PulseRing(color: tone) }
         }
-        .shadow(color: Color.sound.opacity(strongest ? (live ? 0.7 : 0.3) : 0), radius: 10)
+        .shadow(color: tone.opacity(strongest ? (live ? 0.7 : 0.3) : 0), radius: 10)
     }
 }
 
 /// Expanding ring. Its animation state lives here, so the repeating animation touches no other view.
 struct PulseRing: View {
+    var color: Color = .playing
     @State private var pulse = false
 
     var body: some View {
         RoundedRectangle(cornerRadius: 4)
-            .stroke(Color.sound, lineWidth: 2)
+            .stroke(color, lineWidth: 2)
             .scaleEffect(pulse ? 1.12 : 1)
             .opacity(pulse ? 0 : 0.9)
             .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: pulse)
@@ -187,7 +192,8 @@ struct MapChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: live ? "speaker.wave.2.fill" : "speaker.wave.1").foregroundStyle(Color.sound)
+                Image(systemName: live ? "speaker.wave.2.fill" : "speaker.wave.1")
+                    .foregroundStyle(live ? Color.playing : Color.justHeard)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                     if !subtitle.isEmpty {
@@ -199,7 +205,7 @@ struct MapChip: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .glassEffect(.regular.tint(.sound.opacity(0.25)).interactive(), in: .capsule)
+        .glassEffect(.regular.tint((live ? Color.playing : Color.justHeard).opacity(0.25)).interactive(), in: .capsule)
         .accessibilityLabel("\(title), \(subtitle), go to source")
     }
 }
@@ -229,7 +235,7 @@ struct OffDesktopChips: View {
                         }
                         .buttonStyle(.plain)
                         .glassEffect(.regular.interactive(), in: .capsule)
-                        .overlay(Capsule().stroke(Color.sound.opacity(0.7),
+                        .overlay(Capsule().stroke((app.isPlaying ? Color.playing : Color.justHeard).opacity(0.8),
                                                   style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                         .accessibilityLabel("\(app.name), \(text), go to source")
                     }

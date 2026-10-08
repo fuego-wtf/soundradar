@@ -17,7 +17,7 @@ struct SoundRadarApp: App {
             ContentView(model: model)
                 .environment(solo)
         }
-        .defaultSize(width: 980, height: 700)
+        .defaultSize(width: 1120, height: 720)
         .windowToolbarStyle(.unified)
 
         MenuBarExtra {

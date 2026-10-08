@@ -9,10 +9,10 @@ struct MenuBarMixer: View {
         let playing = model.playingApps
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Sound Radar").font(.headline)
+                Text("Sound Radar").font(.posterSmall(20))
                 Spacer()
                 Text(playing.isEmpty ? "Quiet" : "\(playing.count) playing")
-                    .font(.caption).foregroundStyle(playing.isEmpty ? Color.secondary : Color.sound)
+                    .font(.num(12)).foregroundStyle(playing.isEmpty ? Color.secondary : Color.playing)
             }
             HStack(spacing: 8) {
                 OutputDeviceChip().font(.caption).foregroundStyle(.secondary)
@@ -22,7 +22,7 @@ struct MenuBarMixer: View {
             SoloBanner(model: model)
             PermissionHint(model: model)
             if playing.isEmpty {
-                Text("Nothing is playing sound.").font(.callout).foregroundStyle(.secondary)
+                Text("Who's making that noise?").font(.posterSmall(16)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
             } else {
                 GlassEffectContainer(spacing: 8) {
@@ -37,12 +37,13 @@ struct MenuBarMixer: View {
                                             .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer(minLength: 0)
-                                    MuteButton(app: app, model: model)
+                                    MuteControl(app: app, model: model)
                                 }
                                 VolumeSlider(app: app, model: model)
                             }
                             .padding(10)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                            .glassEffect(.regular.tint((app.isPlaying ? Color.playing : Color.justHeard).opacity(0.12)),
+                                         in: .rect(cornerRadius: 14))
                         }
                     }
                 }

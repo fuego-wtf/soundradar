@@ -146,7 +146,7 @@ struct PermissionHint: View {
                     Label("Turn on volume control", systemImage: "lock.open")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(.quaternary, in: .capsule)
+                        .glassEffect(.regular.tint(Color.needsPermission.opacity(0.35)).interactive(), in: .capsule)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Turn on volume control")
@@ -163,7 +163,7 @@ struct SoloBanner: View {
     var body: some View {
         if let name = solo.soloName {
             HStack(spacing: 8) {
-                Image(systemName: "headphones").foregroundStyle(Color.sound)
+                Image(systemName: "headphones").foregroundStyle(Color.playing)
                 Text("Solo: \(name)").font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
                 Button("End solo") { solo.restore(model) }
@@ -171,7 +171,7 @@ struct SoloBanner: View {
                     .accessibilityLabel("End solo")
             }
             .padding(.horizontal, 12).padding(.vertical, 5)
-            .glassEffect(.regular.tint(.sound.opacity(0.2)), in: .capsule)
+            .glassEffect(.regular.tint(Color.playing.opacity(0.2)), in: .capsule)
         }
     }
 }
@@ -231,8 +231,103 @@ final class SoloCoordinator {
     }
 }
 
+// MARK: - Palette: colour comes only from states
+
 extension Color {
-    static let sound = Color.orange
+    init(hex: UInt32) {
+        self.init(red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255)
+    }
+    /// Playing.
+    static let playing = Color(hex: 0x28C840)
+    /// Just heard.
+    static let justHeard = Color(hex: 0xFEBC2E)
+    /// Needs permission.
+    static let needsPermission = Color(hex: 0x6366F1)
+    /// Muted or failed.
+    static let muted = Color(hex: 0xFF5F57)
+}
+
+extension Font {
+    /// Numbers (percent, dB, counts): SF Rounded with monospaced digits.
+    static func num(_ size: CGFloat = 12, weight: Font.Weight = .medium) -> Font {
+        .system(size: size, weight: weight, design: .rounded).monospacedDigit()
+    }
+    /// Poster line: New York serif italic.
+    static let poster = Font.system(size: 28, design: .serif).italic()
+    static func posterSmall(_ size: CGFloat = 18) -> Font { .system(size: size, design: .serif).italic() }
+}
+
+/// Rounds a rect onto the pixel grid so a 1-pixel stroke is crisp (edges land on pixel centres).
+func pixelAligned(_ r: CGRect, scale: CGFloat) -> CGRect {
+    let s = max(1, scale)
+    let x0 = (r.minX * s).rounded() / s + 0.5 / s, y0 = (r.minY * s).rounded() / s + 0.5 / s
+    let x1 = (r.maxX * s).rounded() / s - 0.5 / s, y1 = (r.maxY * s).rounded() / s - 0.5 / s
+    return CGRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
+}
+
+// MARK: - Stage behind the glass
+
+/// Near-black stage with one soft spotlight (dark), paper (light). Glass refracts this.
+struct Stage: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        ZStack {
+            Color(hex: dark ? 0x0B0B0B : 0xF3EBDD)
+            RadialGradient(colors: [Color.white.opacity(dark ? 0.12 : 0.55), .clear],
+                           center: UnitPoint(x: 0.5, y: 0.22), startRadius: 0, endRadius: 560)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// Row hover feedback in 0.12 s.
+struct HoverHighlight: ViewModifier {
+    var radius: CGFloat = 10
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    func hoverHighlight(radius: CGFloat = 10) -> some View { modifier(HoverHighlight(radius: radius)) }
+}
+
+/// The mark; while `active` its wave count runs 0 to 3. Only this leaf redraws.
+struct PulsingMark: View {
+    let active: Bool
+    var color: Color = .primary
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.3, paused: !active)) { tl in
+            let n = active ? Int(tl.date.timeIntervalSinceReferenceDate / 0.3) % 4 : 0
+            SoundRadarMark(waves: n, color: active ? Color.playing : color)
+        }
+    }
+}
+
+/// Big mark (no waves) and a serif italic line, for empty states.
+struct EmptyPoster: View {
+    let title: String
+    var detail: String?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            SoundRadarMark(waves: 0, color: .secondary).frame(width: 72, height: 72)
+            Text(title).font(.posterSmall(22)).multilineTextAlignment(.center)
+            if let detail { Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center) }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 28).padding(.horizontal, 12)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 extension String {

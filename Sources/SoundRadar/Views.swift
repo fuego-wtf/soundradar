@@ -1,78 +1,141 @@
 import SwiftUI
 
-enum RadarTab: String, CaseIterable, Identifiable {
-    case radar = "Radar", history = "History", apps = "All apps"
+/// Sidebar destinations. Playing and Just heard share the radar; Library holds History and All apps.
+enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
+    case playing = "Playing", justHeard = "Just heard", history = "History", apps = "All apps"
     var id: String { rawValue }
+    var isRadar: Bool { self == .playing || self == .justHeard }
 }
 
 struct ContentView: View {
     let model: RadarModel
     @AppStorage("onboarded") private var onboarded = false
-    @State private var tab: RadarTab = .radar
+    @State private var item: SidebarItem? = .playing
     @State private var selected: pid_t?
     @State private var showPermissions = false
+    @State private var showMixer = true
 
     var body: some View {
-        Group {
-            switch tab {
-            case .radar: radar
-            case .history: HistoryList(model: model).padding(16)
-            case .apps: AllAppsList(model: model)
-            }
-        }
-        .frame(minWidth: 820, minHeight: 560)
-        .containerBackground(.thinMaterial, for: .window)
-        .toolbar {
-            ToolbarItem(placement: .navigation) { PlayingCapsule(model: model) }
-            ToolbarItem(placement: .principal) {
-                Picker("View", selection: $tab) {
-                    ForEach(RadarTab.allCases) { Text($0.rawValue).tag($0) }
+        let current = item ?? .playing
+        NavigationSplitView {
+            Sidebar(model: model, item: $item)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
+        } detail: {
+            Group {
+                switch current {
+                case .playing, .justHeard: radar(current)
+                case .history: HistoryList(model: model).padding(16)
+                case .apps: AllAppsList(model: model)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 280)
             }
+            .navigationTitle(current.rawValue)
+        }
+        .frame(minWidth: 900, minHeight: 560)
+        .containerBackground(for: .window) { Stage() }
+        .toolbar {
             ToolbarItem(placement: .primaryAction) { OutputDeviceChip() }
             ToolbarItem(placement: .primaryAction) {
                 Button { showPermissions = true } label: { Image(systemName: "lock.shield") }
                     .help("Permissions")
                     .accessibilityLabel("Permissions")
             }
+            if current.isRadar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showMixer.toggle() } label: { Image(systemName: "sidebar.trailing") }
+                        .help(showMixer ? "Hide mixer" : "Show mixer")
+                        .accessibilityLabel(showMixer ? "Hide mixer" : "Show mixer")
+                }
+            }
         }
+        .background { shortcuts }
         .sheet(isPresented: $showPermissions, onDismiss: { onboarded = true }) {
             PermissionsView(model: model) { showPermissions = false }
         }
         .onAppear { if !onboarded { showPermissions = true } }
     }
 
-    private var radar: some View {
-        let playing = model.playingApps
-        return HStack(alignment: .top, spacing: 16) {
-            VStack(spacing: 12) {
-                RadarMap(model: model, playing: playing) { selected = $0 }
-                    .frame(maxHeight: .infinity)
-                RecentSounds(model: model)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            MixerColumn(model: model, playing: playing, selected: $selected)
-                .frame(width: 330)
-                .frame(maxHeight: .infinity, alignment: .top)
+    /// Chords live in real Buttons (always in the responder chain), not in commands.
+    private var shortcuts: some View {
+        Group {
+            Button("Radar") { item = .playing }.keyboardShortcut("1", modifiers: .command)
+            Button("History") { item = .history }.keyboardShortcut("2", modifiers: .command)
+            Button("All apps") { item = .apps }.keyboardShortcut("3", modifiers: .command)
+        }
+        .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+    }
+
+    private func radar(_ which: SidebarItem) -> some View {
+        let sounding = model.playingApps
+        let list = which == .justHeard ? sounding.filter { !$0.isPlaying } : sounding.filter(\.isPlaying)
+        return VStack(alignment: .leading, spacing: 12) {
+            PosterHeader(model: model, playing: sounding.filter(\.isPlaying).count)
+            RadarMap(model: model, playing: sounding) { selected = $0 }
+                .frame(maxHeight: .infinity)
+            RecentSounds(model: model)
         }
         .padding(16)
+        .inspector(isPresented: $showMixer) {
+            MixerColumn(model: model, list: list,
+                        emptyTitle: which == .justHeard ? "Nothing heard lately" : "Quiet. For now.",
+                        selected: $selected)
+                .padding(.horizontal, 12)
+                .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+        }
     }
 }
 
-/// Header capsule: "N sources playing".
-struct PlayingCapsule: View {
+/// Floating glass sidebar: Radar (Playing, Just heard) and Library (History, All apps).
+struct Sidebar: View {
     let model: RadarModel
+    @Binding var item: SidebarItem?
 
     var body: some View {
-        let n = model.playingApps.count
-        Label(n == 0 ? "Quiet" : "\(n) source\(n == 1 ? "" : "s") playing",
-              systemImage: n == 0 ? "speaker.slash" : "speaker.wave.3.fill")
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(n == 0 ? Color.secondary : Color.sound)
-            .symbolEffect(.variableColor.iterative, options: .repeating, isActive: n > 0)
-            .accessibilityLabel(n == 0 ? "Nothing is playing" : "\(n) sources playing")
+        let sounding = model.playingApps
+        let playing = sounding.filter(\.isPlaying).count
+        List(selection: $item) {
+            Section("Radar") {
+                row(.playing, symbol: "speaker.wave.3.fill", tint: .playing, count: playing)
+                row(.justHeard, symbol: "speaker.wave.1.fill", tint: .justHeard, count: sounding.count - playing)
+            }
+            Section("Library") {
+                row(.history, symbol: "clock", tint: .secondary, count: 0)
+                row(.apps, symbol: "square.grid.2x2", tint: .secondary, count: 0)
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    private func row(_ it: SidebarItem, symbol: String, tint: Color, count: Int) -> some View {
+        Label {
+            HStack {
+                Text(it.rawValue)
+                Spacer(minLength: 0)
+                if count > 0 { Text("\(count)").font(.num(11)).foregroundStyle(.secondary) }
+            }
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
+        }
+        .tag(it)
+    }
+}
+
+/// Poster line: "2 playing" or "Who's making that noise?" in serif italic, with the mark beside it.
+struct PosterHeader: View {
+    let model: RadarModel
+    let playing: Int
+
+    var body: some View {
+        HStack(spacing: 14) {
+            PulsingMark(active: playing > 0).frame(width: 44, height: 44)
+            Text(playing > 0 ? "\(playing) playing" : "Who's making that noise?")
+                .font(.poster)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(playing > 0 ? "\(playing) playing" : "Nothing is playing")
     }
 }
 
@@ -84,14 +147,16 @@ struct SoundEventRow: View {
     var body: some View {
         HStack {
             Text(event.start, format: .dateTime.hour().minute().second())
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            Image(systemName: "speaker.wave.2").foregroundStyle(Color.sound)
+                .font(.num(12, weight: .regular)).foregroundStyle(.secondary)
+            Image(systemName: "speaker.wave.2").foregroundStyle(Color.playing)
             Text(event.name).fontWeight(.medium)
             Text(event.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
             let secs = max(1, Int(event.end.timeIntervalSince(event.start).rounded()))
-            Text("\(secs)s").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+            Text("\(secs)s").font(.num(12, weight: .regular)).foregroundStyle(.tertiary)
         }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .hoverHighlight(radius: 8)
     }
 }
 
@@ -100,16 +165,16 @@ struct RecentSounds: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Recent sounds").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            Text("Recent sounds").font(.system(.subheadline, design: .rounded).weight(.semibold)).foregroundStyle(.secondary)
             if model.history.isEmpty {
                 Text("Nothing yet.").font(.callout).foregroundStyle(.tertiary)
             } else {
-                ForEach(model.history.prefix(4)) { SoundEventRow(event: $0) }
+                ForEach(model.history.prefix(3)) { SoundEventRow(event: $0) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12).padding(.vertical, 10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 }
 
@@ -118,8 +183,8 @@ struct HistoryList: View {
 
     var body: some View {
         if model.history.isEmpty {
-            ContentUnavailableView("No sounds yet", systemImage: "clock",
-                                   description: Text("Every sound burst is listed here."))
+            EmptyPoster(title: "No sounds yet", detail: "Every sound burst is listed here.")
+                .frame(maxHeight: .infinity)
         } else {
             List(model.history) { SoundEventRow(event: $0) }
                 .scrollContentBackground(.hidden)
@@ -136,10 +201,10 @@ struct AllAppsList: View {
         let visible = model.visibleApps
         VStack(spacing: 0) {
             HStack {
-                Text("Apps (\(visible.count))").font(.headline)
+                Text("Apps (\(visible.count))").font(.system(.headline, design: .rounded))
                 Spacer()
                 Toggle("Background apps", isOn: $model.showBackgroundApps)
-                    .toggleStyle(.switch).controlSize(.small)
+                    .toggleStyle(.switch).tint(.playing).controlSize(.small)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             List {
@@ -151,7 +216,7 @@ struct AllAppsList: View {
                         ForEach(model.orphans, id: \.pid) { c in
                             HStack {
                                 Image(systemName: c.isRunningOutput ? "speaker.wave.2" : "mic")
-                                    .foregroundStyle(c.isRunningOutput ? Color.sound : .red)
+                                    .foregroundStyle(c.isRunningOutput ? Color.playing : Color.muted)
                                     .frame(width: 24)
                                 VStack(alignment: .leading) {
                                     Text(c.executableName)
@@ -159,7 +224,7 @@ struct AllAppsList: View {
                                         .lineLimit(1).truncationMode(.middle)
                                 }
                                 Spacer()
-                                Text("pid \(c.pid)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                Text("pid \(c.pid)").font(.num(12, weight: .regular)).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -186,22 +251,23 @@ struct AppRowView: View {
             }
             Spacer()
             if app.isRecording {
-                Image(systemName: "mic.fill").foregroundStyle(.red).help("Using audio input")
+                Image(systemName: "mic.fill").foregroundStyle(Color.muted).help("Using audio input")
                     .accessibilityLabel("Using audio input")
             }
             if app.isPlaying {
-                Image(systemName: "speaker.wave.3.fill").foregroundStyle(Color.sound)
+                Image(systemName: "speaker.wave.3.fill").foregroundStyle(Color.playing)
                     .symbolEffect(.variableColor.iterative, options: .repeating)
                     .accessibilityLabel("Playing")
             } else if app.recentlyPlayed {
-                Image(systemName: "speaker.wave.1").foregroundStyle(Color.sound.opacity(0.6))
+                Image(systemName: "speaker.wave.1").foregroundStyle(Color.justHeard)
                     .accessibilityLabel("Played recently")
             }
-            Text("pid \(app.id)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-            Button("Show", action: activate).buttonStyle(.bordered).controlSize(.small)
+            Text("pid \(app.id)").font(.num(12, weight: .regular)).foregroundStyle(.tertiary)
+            Button("Show", action: activate).buttonStyle(.glass).controlSize(.small)
                 .accessibilityLabel("Show \(app.name)")
         }
         .padding(.vertical, 2)
+        .hoverHighlight()
     }
 
     private var detail: String {
