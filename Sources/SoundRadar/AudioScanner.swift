@@ -23,9 +23,56 @@ final class AudioScanCache {
     private var statics: [AudioObjectID: Static] = [:]
     private var deviceNames: [AudioObjectID: String] = [:]
 
+    // Core Audio tells us when the process list or a process's running state changes, so an
+    // unchanged system costs no property reads at all (each read is a round trip to coreaudiod).
+    private let queue: DispatchQueue
+    private var dirty = true
+    private var lastFull: TimeInterval = 0
+    private var cached: [AudioClient] = []
+    private var watched: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    private lazy var markDirty: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.dirty = true }
+    private static let runningSelectors = [kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyIsRunningInput]
+
+    /// `queue` must be the queue `scan()` runs on; listener blocks are delivered there.
+    init(queue: DispatchQueue) {
+        self.queue = queue
+        var list = AudioScanner.address(kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal)
+        AudioObjectAddPropertyListenerBlock(AudioScanner.system, &list, queue, markDirty)
+    }
+
     /// Processes whose input or output is running right now.
     func scan() -> [AudioClient] {
+        let now = ProcessInfo.processInfo.systemUptime
+        // Device routing has no cheap notification per process; refresh fully every 2 s as a backstop.
+        guard dirty || now - lastFull > 2 else { return cached }
+        dirty = false
+        lastFull = now
+        cached = fullScan()
+        return cached
+    }
+
+    private func watch(_ objects: [AudioObjectID]) {
+        let live = Set(objects)
+        for (obj, block) in watched where !live.contains(obj) {
+            for sel in Self.runningSelectors {
+                var a = AudioScanner.address(sel, kAudioObjectPropertyScopeGlobal)
+                AudioObjectRemovePropertyListenerBlock(obj, &a, queue, block)
+            }
+            watched[obj] = nil
+        }
+        for obj in objects where watched[obj] == nil {
+            let block = markDirty
+            for sel in Self.runningSelectors {
+                var a = AudioScanner.address(sel, kAudioObjectPropertyScopeGlobal)
+                AudioObjectAddPropertyListenerBlock(obj, &a, queue, block)
+            }
+            watched[obj] = block
+        }
+    }
+
+    private func fullScan() -> [AudioClient] {
         let objects: [AudioObjectID] = AudioScanner.readArray(AudioScanner.system, kAudioHardwarePropertyProcessObjectList)
+        watch(objects)
         if statics.count > objects.count * 2 {
             let live = Set(objects)
             statics = statics.filter { live.contains($0.key) }
@@ -69,7 +116,7 @@ enum AudioScanner {
 
     // MARK: - Property helpers
 
-    private static func address(_ selector: AudioObjectPropertySelector,
+    static func address(_ selector: AudioObjectPropertySelector,
                                 _ scope: AudioObjectPropertyScope) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
                                    mElement: kAudioObjectPropertyElementMain)

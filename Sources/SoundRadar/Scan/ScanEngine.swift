@@ -25,7 +25,7 @@ final class ScanEngine: @unchecked Sendable {
     private let queue = DispatchQueue(label: "soundradar.scan", qos: .utility)
     private var timer: DispatchSourceTimer?
     // Everything below is touched only on `queue`.
-    private let audio = AudioScanCache()
+    private lazy var audio = AudioScanCache(queue: queue)
     private var apps: [pid_t: AppInfo] = [:]
     private var owners: [pid_t: pid_t?] = [:]
     private let selfPID = ProcessInfo.processInfo.processIdentifier
