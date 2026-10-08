@@ -89,24 +89,68 @@ struct OutputDeviceChip: View {
 }
 
 extension RadarModel {
-    /// True once the system lets Sound Radar change per-app volume. Reads `lastScan` so views refresh.
-    var volumeControlEnabled: Bool { _ = lastScan; return mixer.permission == .granted }
+    /// True once the system lets Sound Radar change per-app volume. Not observable: read it through
+    /// `VolumeGate` (or `onScan`) so only that leaf refreshes on a scan tick.
+    var volumeControlEnabled: Bool { mixer.permission == .granted }
 }
 
-/// One-line glass hint shown in place of working volume controls until capture is allowed.
+/// Zero-size leaf whose body is the only one that reads `model.lastScan`; a scan tick re-evaluates
+/// this and nothing else, then runs `action`.
+struct ScanSync: View {
+    let model: RadarModel
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onChange(of: model.lastScan) { _, _ in action() }
+            .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Runs `action` on every model scan without making this view depend on `lastScan`.
+    func onScan(_ model: RadarModel, perform action: @escaping () -> Void) -> some View {
+        background(ScanSync(model: model, action: action))
+    }
+}
+
+/// Hands its content whether volume control is allowed, refreshing only itself on a scan.
+struct VolumeGate<Content: View>: View {
+    let model: RadarModel
+    @ViewBuilder let content: (Bool) -> Content
+    @State private var allowed: Bool
+
+    init(model: RadarModel, @ViewBuilder content: @escaping (Bool) -> Content) {
+        self.model = model
+        self.content = content
+        _allowed = State(initialValue: model.volumeControlEnabled)
+    }
+
+    var body: some View {
+        content(allowed).onScan(model) {
+            let now = model.volumeControlEnabled
+            if now != allowed { allowed = now }
+        }
+    }
+}
+
+/// One-line hint shown in place of working volume controls until capture is allowed. Flat, so it can
+/// sit inside glass cards without nesting a second glass layer.
 struct PermissionHint: View {
     let model: RadarModel
 
     var body: some View {
-        if !model.volumeControlEnabled {
-            Button { model.mixer.requestPermission() } label: {
-                Label("Turn on volume control", systemImage: "lock.open")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
+        VolumeGate(model: model) { allowed in
+            if !allowed {
+                Button { model.mixer.requestPermission() } label: {
+                    Label("Turn on volume control", systemImage: "lock.open")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.quaternary, in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Turn on volume control")
             }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .capsule)
-            .accessibilityLabel("Turn on volume control")
         }
     }
 }

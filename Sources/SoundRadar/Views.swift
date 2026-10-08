@@ -45,14 +45,15 @@ struct ContentView: View {
     }
 
     private var radar: some View {
-        HStack(alignment: .top, spacing: 16) {
+        let playing = model.playingApps
+        return HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 12) {
-                RadarMap(model: model) { selected = $0 }
+                RadarMap(model: model, playing: playing) { selected = $0 }
                     .frame(maxHeight: .infinity)
                 RecentSounds(model: model)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            MixerColumn(model: model, selected: $selected)
+            MixerColumn(model: model, playing: playing, selected: $selected)
                 .frame(width: 330)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
@@ -132,16 +133,17 @@ struct AllAppsList: View {
     @Bindable var model: RadarModel
 
     var body: some View {
+        let visible = model.visibleApps
         VStack(spacing: 0) {
             HStack {
-                Text("Apps (\(model.visibleApps.count))").font(.headline)
+                Text("Apps (\(visible.count))").font(.headline)
                 Spacer()
                 Toggle("Background apps", isOn: $model.showBackgroundApps)
                     .toggleStyle(.switch).controlSize(.small)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             List {
-                ForEach(model.visibleApps) { app in
+                ForEach(visible) { app in
                     AppRowView(app: app, location: model.whereLine(app)) { model.jump(to: app) }
                 }
                 if !model.orphans.isEmpty {
@@ -196,7 +198,7 @@ struct AppRowView: View {
                     .accessibilityLabel("Played recently")
             }
             Text("pid \(app.id)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-            Button("Show", action: activate).buttonStyle(.glass).controlSize(.small)
+            Button("Show", action: activate).buttonStyle(.bordered).controlSize(.small)
                 .accessibilityLabel("Show \(app.name)")
         }
         .padding(.vertical, 2)

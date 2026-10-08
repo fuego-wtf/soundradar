@@ -3,11 +3,12 @@ import SwiftUI
 /// Right-hand column: glass channel cards, or the selected source's detail, morphing in place.
 struct MixerColumn: View {
     let model: RadarModel
+    /// Sounding sources, computed once by the parent.
+    let playing: [AppRow]
     @Binding var selected: pid_t?
     @Namespace private var glassNS
 
     var body: some View {
-        let playing = model.playingApps
         VStack(alignment: .leading, spacing: 10) {
             Text("Mixer").font(.headline).foregroundStyle(.secondary)
             SoloBanner(model: model)
@@ -24,6 +25,7 @@ struct MixerColumn: View {
                                        description: Text("Sources appear here the moment they make sound."))
                     .frame(maxWidth: .infinity)
             } else {
+                PermissionHint(model: model)
                 ScrollView {
                     GlassEffectContainer(spacing: 12) {
                         VStack(spacing: 10) {
@@ -49,7 +51,6 @@ struct ChannelCard: View {
     let app: AppRow
     let model: RadarModel
     let open: () -> Void
-    @State private var muted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -69,13 +70,10 @@ struct ChannelCard: View {
                 .accessibilityLabel("\(app.name), show details")
                 MuteButton(app: app, model: model)
             }
-            LevelMeter(model: model, pid: app.id, muted: muted)
+            LevelMeter(model: model, pid: app.id)
             VolumeSlider(app: app, model: model)
-            PermissionHint(model: model)
         }
         .padding(12)
         .opacity(app.isPlaying ? 1 : 0.7)
-        .onAppear { muted = model.mixer.isMuted(app.id) }
-        .onChange(of: model.lastScan) { _, _ in muted = model.mixer.isMuted(app.id) }
     }
 }
