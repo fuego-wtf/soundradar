@@ -61,3 +61,40 @@ enum LocatePure {
         return (t.isEmpty ? nil : t, u.isEmpty ? nil : u)
     }
 }
+
+/// Pure scheduling decisions for the locator (no clocks, no AppleScript).
+enum LocatePolicy {
+    /// How long a pid is left alone after one of its scripts timed out.
+    static let backoff: TimeInterval = 30
+
+    /// A queued script whose caller has already given up must not run.
+    static func shouldSkipStale(enqueuedAt: Date, now: Date, timeout: TimeInterval) -> Bool {
+        now.timeIntervalSince(enqueuedAt) >= timeout
+    }
+
+    /// True while a pid is in its post-timeout back-off window.
+    static func inBackoff(until: Date?, now: Date) -> Bool {
+        guard let until else { return false }
+        return now < until
+    }
+
+    /// Back-off end after a script outcome: a nil reply (timeout or failure) starts one.
+    static func backoffUntil(reply: String?, now: Date) -> Date? {
+        reply == nil ? now.addingTimeInterval(backoff) : nil
+    }
+
+    /// AX windows are only needed to tell "minimized" from "other desktop", i.e. for an
+    /// offscreen window of an app that is not hidden.
+    static func needsAXMinimizedCheck(_ pick: WindowPick) -> Bool {
+        pick.space == .otherDesktop
+    }
+}
+
+/// At most one locate per pid at a time.
+struct InFlightGuard {
+    private var pids: Set<pid_t> = []
+    /// Returns false when `pid` already has a locate in flight.
+    mutating func begin(_ pid: pid_t) -> Bool { pids.insert(pid).inserted }
+    mutating func end(_ pid: pid_t) { pids.remove(pid) }
+    func isInFlight(_ pid: pid_t) -> Bool { pids.contains(pid) }
+}

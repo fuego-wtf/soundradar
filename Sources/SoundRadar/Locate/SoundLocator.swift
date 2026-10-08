@@ -21,27 +21,56 @@ final class SoundLocator: SoundLocating {
 
     private struct Cached { let at: Date; let title: String?; let url: String? }
     private var cache: [pid_t: Cached] = [:]
+    private var backoffUntil: [pid_t: Date] = [:]
+    private var lastLocation: [pid_t: SourceLocation] = [:]
+    private var inFlight = InFlightGuard()
     private let runner = ScriptRunner()
+    /// Own serial queue so a jump never waits behind lookups.
+    private let jumpRunner = ScriptRunner()
+    private static let axTimeout: Float = 0.25
 
     // MARK: locate
 
     func locate(app: pid_t, bundleID: String?, helperPIDs: [pid_t]) async -> SourceLocation {
-        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
-        let running = NSRunningApplication(processIdentifier: app)
-        let ax = axWindows(app)
-        let allMin = !ax.isEmpty && ax.allSatisfy { Self.isMinimized($0) }
-        let pick = LocatePure.pick(windows: list, pid: app, appHidden: running?.isHidden ?? false, axMinimized: allMin)
+        guard inFlight.begin(app) else {
+            return lastLocation[app] ?? SourceLocation(windowTitle: nil, space: .noWindow, windowNumber: nil)
+        }
+        defer { inFlight.end(app) }
+        let hidden = NSRunningApplication(processIdentifier: app)?.isHidden ?? false
+        let pick = await Self.windowPick(pid: app, appHidden: hidden, axGranted: AXIsProcessTrusted())
         var loc = SourceLocation(windowTitle: pick.title, space: pick.space, windowNumber: pick.windowNumber)
+        defer { lastLocation[app] = loc }
         guard pick.space != .noWindow, browserTabsEnabled, let fam = BrowserFamily.of(bundleID: bundleID) else { return loc }
-        if let c = cache[app], Date().timeIntervalSince(c.at) < 10 {
+        let now = Date()
+        if let c = cache[app], now.timeIntervalSince(c.at) < 10 {
             loc.tabTitle = c.title; loc.tabURL = c.url
             return loc
         }
+        if LocatePolicy.inBackoff(until: backoffUntil[app], now: now) { return loc }
+        // Negative entry first: whatever happens to the script, the next second reuses it.
+        cache[app] = Cached(at: now, title: nil, url: nil)
         let reply = await runner.run(BrowserScripts.activeTab(fam, windowHint: pick.title), timeout: 1.5)
+        backoffUntil[app] = LocatePolicy.backoffUntil(reply: reply, now: Date())
         let parsed = LocatePure.parseTabReply(reply)
         cache[app] = Cached(at: Date(), title: parsed?.title, url: parsed?.url)
         loc.tabTitle = parsed?.title; loc.tabURL = parsed?.url
         return loc
+    }
+
+    /// CGWindowList (+ AX only when the picked window is offscreen) on a background queue.
+    private nonisolated static func windowPick(pid: pid_t, appHidden: Bool, axGranted: Bool) async -> WindowPick {
+        await withCheckedContinuation { (cont: CheckedContinuation<WindowPick, Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+                var pick = LocatePure.pick(windows: list, pid: pid, appHidden: appHidden, axMinimized: false)
+                if axGranted, LocatePolicy.needsAXMinimizedCheck(pick) {
+                    let ax = axWindows(pid)
+                    let allMin = !ax.isEmpty && ax.allSatisfy { isMinimized($0) }
+                    pick = LocatePure.pick(windows: list, pid: pid, appHidden: appHidden, axMinimized: allMin)
+                }
+                cont.resume(returning: pick)
+            }
+        }
     }
 
     // MARK: jump
@@ -51,11 +80,11 @@ final class SoundLocator: SoundLocating {
         if running?.isHidden == true { running?.unhide() }
         if browserTabsEnabled, let fam = BrowserFamily.of(bundleID: bundleID), let url = location.tabURL {
             let script = BrowserScripts.selectTab(fam, url: url)
-            Task { [runner] in _ = await runner.run(script, timeout: 1.5) }
+            Task { [jumpRunner] in _ = await jumpRunner.run(script, timeout: 1.5) }
         }
         running?.activate(options: [.activateAllWindows])
         guard accessibilityGranted else { return }
-        let wins = axWindows(app)
+        let wins = Self.axWindows(app)
         let title = location.windowTitle ?? location.tabTitle
         let target = wins.first { w in title != nil && Self.title(of: w) == title }
             ?? wins.first { w in
@@ -70,21 +99,24 @@ final class SoundLocator: SoundLocating {
 
     // MARK: AX helpers
 
-    private func axWindows(_ pid: pid_t) -> [AXUIElement] {
-        guard accessibilityGranted else { return [] }
+    private nonisolated static func axWindows(_ pid: pid_t) -> [AXUIElement] {
+        guard AXIsProcessTrusted() else { return [] }
         var v: CFTypeRef?
         let el = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(el, axTimeout)
         guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &v) == .success else { return [] }
-        return (v as? [AXUIElement]) ?? []
+        let wins = (v as? [AXUIElement]) ?? []
+        for w in wins { AXUIElementSetMessagingTimeout(w, axTimeout) }
+        return wins
     }
 
-    private static func title(of w: AXUIElement) -> String? {
+    private nonisolated static func title(of w: AXUIElement) -> String? {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &v) == .success else { return nil }
         return v as? String
     }
 
-    private static func isMinimized(_ w: AXUIElement) -> Bool {
+    private nonisolated static func isMinimized(_ w: AXUIElement) -> Bool {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &v) == .success else { return false }
         return (v as? Bool) ?? false
@@ -101,9 +133,15 @@ final class ScriptRunner: @unchecked Sendable {
     }
 
     func run(_ source: String, timeout: TimeInterval) async -> String? {
-        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+        let enqueued = Date()
+        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             let once = Once()
             queue.async {
+                // The caller already timed out: do not spend queue time on a dead script.
+                if LocatePolicy.shouldSkipStale(enqueuedAt: enqueued, now: Date(), timeout: timeout) {
+                    if once.claim() { cont.resume(returning: nil) }
+                    return
+                }
                 var result: String?
                 if let script = NSAppleScript(source: source) {
                     var err: NSDictionary?

@@ -207,4 +207,40 @@ final class LocateTests: XCTestCase {
         XCTAssertTrue(safari.contains("(name of t)"))
         XCTAssertTrue(BrowserScripts.activeTab(.arc, windowHint: nil).contains("(title of t)"))
     }
+
+    // MARK: scheduling policy
+
+    func testStaleScriptSkipDecision() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        XCTAssertFalse(LocatePolicy.shouldSkipStale(enqueuedAt: t0, now: t0.addingTimeInterval(1.49), timeout: 1.5))
+        XCTAssertTrue(LocatePolicy.shouldSkipStale(enqueuedAt: t0, now: t0.addingTimeInterval(1.5), timeout: 1.5))
+        XCTAssertTrue(LocatePolicy.shouldSkipStale(enqueuedAt: t0, now: t0.addingTimeInterval(30), timeout: 1.5))
+    }
+
+    func testBackoffDecision() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        XCTAssertNil(LocatePolicy.backoffUntil(reply: "ok", now: t0))
+        XCTAssertEqual(LocatePolicy.backoffUntil(reply: nil, now: t0), t0.addingTimeInterval(30))
+        XCTAssertFalse(LocatePolicy.inBackoff(until: nil, now: t0))
+        XCTAssertTrue(LocatePolicy.inBackoff(until: t0.addingTimeInterval(30), now: t0.addingTimeInterval(29.9)))
+        XCTAssertFalse(LocatePolicy.inBackoff(until: t0.addingTimeInterval(30), now: t0.addingTimeInterval(30)))
+    }
+
+    func testInFlightGuardIsPerPid() {
+        var g = InFlightGuard()
+        XCTAssertTrue(g.begin(1))
+        XCTAssertFalse(g.begin(1))
+        XCTAssertTrue(g.begin(2))
+        XCTAssertTrue(g.isInFlight(1))
+        g.end(1)
+        XCTAssertFalse(g.isInFlight(1))
+        XCTAssertTrue(g.begin(1))
+    }
+
+    func testAXOnlyChecksForOffscreenNotHiddenWindows() {
+        XCTAssertFalse(LocatePolicy.needsAXMinimizedCheck(WindowPick(windowNumber: 1, title: nil, space: .thisDesktop)))
+        XCTAssertFalse(LocatePolicy.needsAXMinimizedCheck(WindowPick(windowNumber: 1, title: nil, space: .hidden)))
+        XCTAssertFalse(LocatePolicy.needsAXMinimizedCheck(WindowPick(windowNumber: nil, title: nil, space: .noWindow)))
+        XCTAssertTrue(LocatePolicy.needsAXMinimizedCheck(WindowPick(windowNumber: 1, title: nil, space: .otherDesktop)))
+    }
 }
