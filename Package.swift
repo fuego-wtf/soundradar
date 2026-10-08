@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SoundRadar",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     targets: [
         .executableTarget(name: "SoundRadar", path: "Sources/SoundRadar")
     ]
