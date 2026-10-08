@@ -26,9 +26,9 @@ enum ProcessTree {
         return unsafeBitCast(sym, to: ResponsibleFn.self)
     }()
 
-    /// Returns the app that owns `pid`, preferring a Dock (regular) app over hidden agents
+    /// Returns the pid of the app that owns `pid`, preferring a Dock (regular) app over hidden agents
     /// such as SimulatorTrampoline, which would otherwise swallow the attribution.
-    static func owningApp(for pid: pid_t, apps: [pid_t: NSRunningApplication]) -> NSRunningApplication? {
+    static func owningPID(for pid: pid_t, apps: [pid_t: AppInfo]) -> pid_t? {
         var candidates: [pid_t] = [pid]
         if let fn = responsibleFn {
             let r = fn(pid)
@@ -41,12 +41,12 @@ enum ProcessTree {
             current = p
         }
         let found = candidates.compactMap { apps[$0] }
-        if let regular = found.first(where: { $0.activationPolicy == .regular }) { return regular }
+        if let regular = found.first(where: \.isRegular) { return regular.pid }
         // Simulated devices run under launchd_sim, not under Simulator.app.
         if let path = path(of: pid), path.contains("/CoreSimulator/"),
-           let sim = apps.values.first(where: { $0.bundleIdentifier == "com.apple.iphonesimulator" }) {
-            return sim
+           let sim = apps.values.first(where: { $0.bundleID == "com.apple.iphonesimulator" }) {
+            return sim.pid
         }
-        return found.first
+        return found.first?.pid
     }
 }

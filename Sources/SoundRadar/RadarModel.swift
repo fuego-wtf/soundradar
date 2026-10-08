@@ -2,7 +2,7 @@ import AppKit
 import CoreAudio
 import Observation
 
-struct AppRow: Identifiable {
+struct AppRow: Identifiable, Equatable {
     let id: pid_t
     let name: String
     let bundleID: String?
@@ -18,10 +18,20 @@ struct AppRow: Identifiable {
     var location: SourceLocation?
     var lastPlayed: Date?
     var windows: [WindowBox] = []
+    /// Snapshot of `recentlyPlayed` at scan time, so rows compare equal between scans.
+    var recent = false
 
     var recentlyPlayed: Bool {
         guard let lastPlayed else { return false }
         return Date().timeIntervalSince(lastPlayed) < RadarModel.holdSeconds
+    }
+
+    /// Icons are cached per pid and never change, so equality ignores them.
+    static func == (a: AppRow, b: AppRow) -> Bool {
+        a.id == b.id && a.name == b.name && a.isPlaying == b.isPlaying && a.isRecording == b.isRecording
+            && a.recent == b.recent && a.outputDevices == b.outputDevices && a.inputDevices == b.inputDevices
+            && a.helpers == b.helpers && a.audioObjects == b.audioObjects && a.location == b.location
+            && a.windows == b.windows && a.isRegular == b.isRegular
     }
 }
 
@@ -29,57 +39,87 @@ struct AppRow: Identifiable {
 @MainActor
 final class RadarModel {
     nonisolated static let holdSeconds: TimeInterval = 4   // keep short blips (alert sounds) visible
+    nonisolated static let scanInterval: TimeInterval = 0.3
 
-    var apps: [AppRow] = []
-    var orphans: [AudioClient] = []            // audio processes with no GUI owner
-    var displays: [DisplayBox] = []
-    var allWindows: [WindowBox] = []
-    var showBackgroundApps = false
-    var lastScan = Date()
-    var history: [SoundEvent] = []            // newest first, one entry per sound burst
+    // Assigned only when they change, so a scan that finds nothing new redraws nothing.
+    private(set) var apps: [AppRow] = []
+    private(set) var playingApps: [AppRow] = []
+    private(set) var visibleApps: [AppRow] = []
+    private(set) var orphans: [AudioClient] = []            // audio processes with no GUI owner
+    private(set) var displays: [DisplayBox] = []
+    private(set) var allWindows: [WindowBox] = []
+    var showBackgroundApps = false { didSet { publish(apps) } }
+    /// Ticks on every scan; read only inside small leaf views.
+    private(set) var lastScan = Date()
+    private(set) var history: [SoundEvent] = []            // newest first, one entry per sound burst
 
     let mixer: AudioMixing
     let locator: SoundLocating
     private var locations: [pid_t: SourceLocation] = [:]
     private var lastLocate = Date.distantPast
-
     private var lastPlayed: [pid_t: Date] = [:]
-    private var timer: Timer?
+
+    private let engine = ScanEngine()
+    private var appInfos: [pid_t: AppInfo] = [:]
+    private var icons: [pid_t: NSImage] = [:]
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     init(mixer: AudioMixing, locator: SoundLocating) {
         self.mixer = mixer
         self.locator = locator
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+        reloadApps()
+        displays = WindowScanner.displays()
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
+                     NSWorkspace.didActivateApplicationNotification] {
+            observers.append(ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reloadApps() }
+            })
         }
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let d = WindowScanner.displays()
+                if d != self.displays { self.displays = d }
+            }
+        })
+        engine.start(every: Self.scanInterval) { [weak self] result in self?.apply(result) }
     }
 
-    var playingApps: [AppRow] { apps.filter { $0.isPlaying || $0.recentlyPlayed } }
-
-    var visibleApps: [AppRow] {
-        apps.filter { showBackgroundApps || $0.isRegular || $0.isPlaying || $0.isRecording || $0.recentlyPlayed }
+    /// Running apps change rarely; rebuild their snapshot on launch, quit and activation only.
+    private func reloadApps() {
+        var infos: [pid_t: AppInfo] = [:]
+        for app in NSWorkspace.shared.runningApplications {
+            let pid = app.processIdentifier
+            infos[pid] = AppInfo(pid: pid, name: app.localizedName ?? app.bundleIdentifier ?? "pid \(pid)",
+                                 bundleID: app.bundleIdentifier, isRegular: app.activationPolicy == .regular)
+        }
+        guard infos != appInfos else { return }
+        icons = icons.filter { infos[$0.key] != nil }
+        appInfos = infos
+        engine.update(apps: infos)
     }
 
-    func refresh() {
-        let running = NSWorkspace.shared.runningApplications
-        let byPID = Dictionary(running.map { ($0.processIdentifier, $0) }, uniquingKeysWith: { a, _ in a })
+    private func icon(for pid: pid_t) -> NSImage? {
+        if let i = icons[pid] { return i }
+        let i = NSRunningApplication(processIdentifier: pid)?.icon
+        icons[pid] = i
+        return i
+    }
+
+    private func apply(_ result: ScanResult) {
+        let now = Date()
         var rows: [pid_t: AppRow] = [:]
-        for app in running {
-            rows[app.processIdentifier] = AppRow(
-                id: app.processIdentifier,
-                name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
-                bundleID: app.bundleIdentifier, icon: app.icon,
-                isRegular: app.activationPolicy == .regular)
+        rows.reserveCapacity(appInfos.count)
+        for (pid, info) in appInfos {
+            rows[pid] = AppRow(id: pid, name: info.name, bundleID: info.bundleID, icon: nil, isRegular: info.isRegular)
         }
 
         var unowned: [AudioClient] = []
-        let now = Date()
-        // Our own taps make Sound Radar look like a player; never list ourselves.
-        let selfPID = ProcessInfo.processInfo.processIdentifier
-        for client in AudioScanner.scan() where (client.isRunningOutput || client.isRunningInput) && client.pid != selfPID {
-            guard let owner = ProcessTree.owningApp(for: client.pid, apps: byPID),
-                  var row = rows[owner.processIdentifier] else {
+        for owned in result.clients {
+            let client = owned.client
+            guard let ownerPID = owned.ownerPID, var row = rows[ownerPID] else {
                 unowned.append(client)
                 continue
             }
@@ -93,37 +133,58 @@ final class RadarModel {
                 row.isRecording = true
                 row.inputDevices.formUnion(client.inputDevices)
             }
-            if client.pid != owner.processIdentifier {
+            if client.pid != ownerPID {
                 row.helpers.insert(client.executableName)
                 row.helperPIDs.append(client.pid)
             }
-            rows[row.id] = row
+            rows[ownerPID] = row
         }
 
-        let windows = WindowScanner.windows()
-        let windowsByPID = Dictionary(grouping: windows, by: \.pid)
+        let windowsByPID = Dictionary(grouping: result.windows, by: \.pid)
+        lastPlayed = lastPlayed.filter { rows[$0.key] != nil }
+        var list: [AppRow] = []
+        list.reserveCapacity(rows.count)
         for (pid, var row) in rows {
             row.lastPlayed = lastPlayed[pid]
+            row.recent = row.recentlyPlayed
             row.windows = windowsByPID[pid] ?? []
             row.location = locations[pid]
-            rows[pid] = row
+            list.append(row)
         }
-        lastPlayed = lastPlayed.filter { rows[$0.key] != nil }
-        recordHistory(rows: rows, orphans: unowned, now: now)
-        mixer.sync(rows.values.filter { $0.isPlaying }.map { AudioSource(app: $0.id, processObjects: $0.audioObjects) })
-        if now.timeIntervalSince(lastLocate) > 1 {
-            lastLocate = now
-            locateSounding(Array(rows.values.filter { $0.isPlaying || $0.recentlyPlayed }))
-        }
-
-        apps = rows.values.sorted { a, b in
+        list.sort { a, b in
             let ra = rank(a), rb = rank(b)
             return ra != rb ? ra < rb : a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
-        orphans = unowned.sorted { $0.executableName < $1.executableName }
-        allWindows = windows
-        displays = WindowScanner.displays()
+
+        recordHistory(rows: rows, orphans: unowned, now: now)
+        mixer.sync(list.filter(\.isPlaying).map { AudioSource(app: $0.id, processObjects: $0.audioObjects) })
+        if now.timeIntervalSince(lastLocate) > 1 {
+            lastLocate = now
+            locateSounding(list.filter { $0.isPlaying || $0.recent })
+        }
+
+        publish(list)
+        let o = unowned.sorted { $0.executableName < $1.executableName }
+        if o != orphans { orphans = o }
+        if result.windows != allWindows { allWindows = result.windows }
         lastScan = now
+    }
+
+    /// Fills icons for the rows that are shown and assigns only what changed.
+    private func publish(_ list: [AppRow]) {
+        let withIcons = list.map { row -> AppRow in
+            guard row.isRegular || row.isPlaying || row.isRecording || row.recent || showBackgroundApps else { return row }
+            return AppRow(id: row.id, name: row.name, bundleID: row.bundleID, icon: icon(for: row.id),
+                          isRegular: row.isRegular, isPlaying: row.isPlaying, isRecording: row.isRecording,
+                          outputDevices: row.outputDevices, inputDevices: row.inputDevices, helpers: row.helpers,
+                          helperPIDs: row.helperPIDs, audioObjects: row.audioObjects, location: row.location,
+                          lastPlayed: row.lastPlayed, windows: row.windows, recent: row.recent)
+        }
+        if withIcons != apps { apps = withIcons }
+        let playing = withIcons.filter { $0.isPlaying || $0.recent }
+        if playing != playingApps { playingApps = playing }
+        let visible = withIcons.filter { showBackgroundApps || $0.isRegular || $0.isPlaying || $0.isRecording || $0.recent }
+        if visible != visibleApps { visibleApps = visible }
     }
 
     private var playingKeys: Set<String> = []
@@ -139,7 +200,7 @@ final class RadarModel {
         }
         for (key, info) in current {
             if playingKeys.contains(key), let i = history.firstIndex(where: { $0.key == key }) {
-                history[i].end = now
+                if now.timeIntervalSince(history[i].end) >= 1 { history[i].end = now }   // 1 s granularity: fewer redraws
             } else {
                 history.insert(SoundEvent(key: key, name: info.name, detail: info.detail, start: now, end: now), at: 0)
             }
@@ -150,7 +211,7 @@ final class RadarModel {
 
     private func rank(_ row: AppRow) -> Int {
         if row.isPlaying { return 0 }
-        if row.recentlyPlayed { return 1 }
+        if row.recent { return 1 }
         if row.isRecording { return 2 }
         return row.isRegular ? 3 : 4
     }
@@ -181,11 +242,12 @@ final class RadarModel {
             Task { [weak self] in
                 guard let self else { return }
                 let loc = await self.locator.locate(app: row.id, bundleID: row.bundleID, helperPIDs: row.helperPIDs)
+                guard self.locations[row.id] != loc else { return }
                 self.locations[row.id] = loc
-                if let i = self.apps.firstIndex(where: { $0.id == row.id }) { self.apps[i].location = loc }
+                self.publish(self.apps.map { r in var r = r; if r.id == row.id { r.location = loc }; return r })
             }
         }
-        locations = locations.filter { key, _ in rows.contains { $0.id == key } || apps.contains { $0.id == key && ($0.isPlaying || $0.recentlyPlayed) } }
+        locations = locations.filter { key, _ in rows.contains { $0.id == key } }
     }
 
     func jump(to row: AppRow) {

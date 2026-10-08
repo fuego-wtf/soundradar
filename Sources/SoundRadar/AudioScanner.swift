@@ -15,30 +15,57 @@ struct AudioClient: Hashable {
     var executableName: String { (executablePath as NSString).lastPathComponent }
 }
 
-enum AudioScanner {
-    private static let system = AudioObjectID(kAudioObjectSystemObject)
+/// Reads Core Audio's process objects. Not thread-safe: owned by the scan queue.
+/// Static facts (pid, bundle id, path, device names) are read once per object and cached,
+/// so a scan of ~150 processes costs two property reads each.
+final class AudioScanCache {
+    private struct Static { let pid: pid_t; let bundleID: String?; let path: String }
+    private var statics: [AudioObjectID: Static] = [:]
+    private var deviceNames: [AudioObjectID: String] = [:]
 
-    /// Every process Core Audio currently knows about, with its I/O state.
-    static func scan() -> [AudioClient] {
-        let objects: [AudioObjectID] = readArray(system, kAudioHardwarePropertyProcessObjectList)
-        return objects.compactMap { obj in
-            guard let pid: pid_t = readScalar(obj, kAudioProcessPropertyPID) else { return nil }
-            let out: UInt32 = readScalar(obj, kAudioProcessPropertyIsRunningOutput) ?? 0
-            let inp: UInt32 = readScalar(obj, kAudioProcessPropertyIsRunningInput) ?? 0
-            let outDevs: [AudioObjectID] = readArray(obj, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeOutput)
-            let inDevs: [AudioObjectID] = readArray(obj, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
-            return AudioClient(
-                objectID: obj,
-                pid: pid,
-                bundleID: readString(obj, kAudioProcessPropertyBundleID),
-                executablePath: ProcessTree.path(of: pid) ?? "pid \(pid)",
-                isRunningOutput: out != 0,
-                isRunningInput: inp != 0,
-                outputDevices: outDevs.compactMap { readString($0, kAudioObjectPropertyName) },
-                inputDevices: inDevs.compactMap { readString($0, kAudioObjectPropertyName) }
-            )
+    /// Processes whose input or output is running right now.
+    func scan() -> [AudioClient] {
+        let objects: [AudioObjectID] = AudioScanner.readArray(AudioScanner.system, kAudioHardwarePropertyProcessObjectList)
+        if statics.count > objects.count * 2 {
+            let live = Set(objects)
+            statics = statics.filter { live.contains($0.key) }
+        }
+        var clients: [AudioClient] = []
+        for obj in objects {
+            let out: UInt32 = AudioScanner.readScalar(obj, kAudioProcessPropertyIsRunningOutput) ?? 0
+            let inp: UInt32 = AudioScanner.readScalar(obj, kAudioProcessPropertyIsRunningInput) ?? 0
+            guard out != 0 || inp != 0 else { continue }
+            let st: Static
+            if let cached = statics[obj] {
+                st = cached
+            } else {
+                guard let pid: pid_t = AudioScanner.readScalar(obj, kAudioProcessPropertyPID) else { continue }
+                st = Static(pid: pid, bundleID: AudioScanner.readString(obj, kAudioProcessPropertyBundleID),
+                            path: ProcessTree.path(of: pid) ?? "pid \(pid)")
+                statics[obj] = st
+            }
+            clients.append(AudioClient(
+                objectID: obj, pid: st.pid, bundleID: st.bundleID, executablePath: st.path,
+                isRunningOutput: out != 0, isRunningInput: inp != 0,
+                outputDevices: out != 0 ? names(obj, kAudioObjectPropertyScopeOutput) : [],
+                inputDevices: inp != 0 ? names(obj, kAudioObjectPropertyScopeInput) : []))
+        }
+        return clients
+    }
+
+    private func names(_ obj: AudioObjectID, _ scope: AudioObjectPropertyScope) -> [String] {
+        let devs: [AudioObjectID] = AudioScanner.readArray(obj, kAudioProcessPropertyDevices, scope: scope)
+        return devs.compactMap { d in
+            if let n = deviceNames[d] { return n }
+            let n = AudioScanner.readString(d, kAudioObjectPropertyName)
+            if let n { deviceNames[d] = n }
+            return n
         }
     }
+}
+
+enum AudioScanner {
+    static let system = AudioObjectID(kAudioObjectSystemObject)
 
     // MARK: - Property helpers
 
@@ -48,7 +75,7 @@ enum AudioScanner {
                                    mElement: kAudioObjectPropertyElementMain)
     }
 
-    private static func readScalar<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
+    static func readScalar<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
                                       scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> T? {
         var addr = address(selector, scope)
         var size = UInt32(MemoryLayout<T>.size)
@@ -58,7 +85,7 @@ enum AudioScanner {
         return value.pointee
     }
 
-    private static func readArray<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
+    static func readArray<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
                                      scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [T] {
         var addr = address(selector, scope)
         var size: UInt32 = 0
@@ -70,7 +97,7 @@ enum AudioScanner {
         return Array(UnsafeBufferPointer(start: buffer, count: Int(size) / MemoryLayout<T>.stride))
     }
 
-    private static func readString(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+    static func readString(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
         var addr = address(selector, kAudioObjectPropertyScopeGlobal)
         var size = UInt32(MemoryLayout<CFString?>.size)
         var value: Unmanaged<CFString>?
