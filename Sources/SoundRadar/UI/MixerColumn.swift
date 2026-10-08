@@ -5,7 +5,6 @@ struct MixerColumn: View {
     let model: RadarModel
     @Binding var selected: pid_t?
     @Namespace private var glassNS
-    @Environment(SoloCoordinator.self) private var solo
 
     var body: some View {
         let playing = model.playingApps
