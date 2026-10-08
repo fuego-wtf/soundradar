@@ -91,12 +91,13 @@ enum MixerMath {
     // MARK: Render
 
     /// Copies interleaved `input` to `output` through the smoothed gain and the limiter.
-    /// Output channels beyond the input's are silent. Returns the sum of squares of the
+    /// Output channel c reads input channel c + `inOffset` (used to de-interleave one stereo
+    /// input into separate mono output buffers). Output channels beyond the input's are silent. Returns the sum of squares of the
     /// input (pre-gain) for metering. `gain` is advanced in place.
     static func render(input: UnsafePointer<Float>, inChannels: Int,
                        output: UnsafeMutablePointer<Float>, outChannels: Int,
                        frames: Int, gain: inout Float, target: Float,
-                       coefficient: Float = gainRampCoefficient) -> Float {
+                       coefficient: Float = gainRampCoefficient, inOffset: Int = 0) -> Float {
         var sumSq: Float = 0
         var g = gain
         var f = 0
@@ -104,8 +105,8 @@ enum MixerMath {
             g = gainRamp(current: g, target: target, coefficient: coefficient)
             var c = 0
             while c < outChannels {
-                if c < inChannels {
-                    let s = input[f * inChannels + c]
+                if c + inOffset < inChannels {
+                    let s = input[f * inChannels + c + inOffset]
                     sumSq += s * s
                     output[f * outChannels + c] = softLimit(s * g)
                 } else {
@@ -132,10 +133,12 @@ enum MixerMath {
     /// - `sources`: process objects each app has now.
     /// - `lastActive`: last time (seconds) an app was seen sounding.
     /// A channel whose app stopped is kept until it has been silent for `grace` seconds.
+    /// `keepAlive` are processing channels whose process is still alive: never torn down.
     static func planChannels(current: [pid_t: Set<AudioObjectID>],
                              sources: [pid_t: Set<AudioObjectID>],
                              lastActive: [pid_t: TimeInterval],
-                             now: TimeInterval, grace: TimeInterval) -> ChannelPlan {
+                             now: TimeInterval, grace: TimeInterval,
+                             keepAlive: Set<pid_t> = []) -> ChannelPlan {
         var plan = ChannelPlan()
         for (pid, objects) in sources where !objects.isEmpty {
             if let existing = current[pid] {
@@ -146,9 +149,30 @@ enum MixerMath {
         }
         for pid in current.keys {
             if let objects = sources[pid], !objects.isEmpty { continue }
+            // A processing (muted or turned-down) channel owns its app's sound: while the
+            // process lives, dropping the tap would leak the app's next blip at full volume.
+            if keepAlive.contains(pid) { continue }
             let last = lastActive[pid] ?? -.infinity
             if now - last >= grace { plan.teardown.insert(pid) }
         }
         return plan
+    }
+
+    // MARK: Stall watchdog
+
+    struct StallProgress: Equatable {
+        var count: Int
+        var at: TimeInterval
+    }
+
+    /// Tracks the IOProc callback counter of a running channel. `progress` is the last count seen
+    /// and when it last changed (start it at `(0, startedAt)`). A processing channel whose count
+    /// has not advanced for more than `threshold` seconds is stalled: its muted tap would keep the
+    /// app silent, so the caller must destroy it. Meter-only channels never stall the sound.
+    static func stallStep(processing: Bool, count: Int, progress: StallProgress,
+                          now: TimeInterval, threshold: TimeInterval) -> (progress: StallProgress, stalled: Bool) {
+        var p = progress
+        if count != p.count { p = StallProgress(count: count, at: now) }
+        return (p, processing && now - p.at > threshold)
     }
 }

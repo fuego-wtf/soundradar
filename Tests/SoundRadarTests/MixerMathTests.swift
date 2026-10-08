@@ -183,4 +183,36 @@ final class MixerMathTests: XCTestCase {
         let plan = MixerMath.planChannels(current: [:], sources: [1: []], lastActive: [:], now: 0, grace: 5)
         XCTAssertEqual(plan, Plan())
     }
+
+    func testPlanKeepsProcessingChannelOfLiveProcessPastGrace() {
+        let current: [pid_t: Set<AudioObjectID>] = [1: [10], 2: [20]]
+        let plan = MixerMath.planChannels(current: current, sources: [:], lastActive: [1: 0, 2: 0],
+                                          now: 500, grace: 5, keepAlive: [1])
+        XCTAssertEqual(plan.teardown, [2])
+    }
+
+    func testPlanStillRebuildsKeptChannelWhenObjectsChange() {
+        let plan = MixerMath.planChannels(current: [1: [10]], sources: [1: [11]], lastActive: [1: 0],
+                                          now: 500, grace: 5, keepAlive: [1])
+        XCTAssertEqual(plan.rebuild, [1])
+        XCTAssertTrue(plan.teardown.isEmpty)
+    }
+
+    func testStallDetectedOnlyForProcessingChannelWithFrozenCount() {
+        var p = MixerMath.StallProgress(count: 0, at: 100)
+        var r = MixerMath.stallStep(processing: true, count: 0, progress: p, now: 100.9, threshold: 1)
+        XCTAssertFalse(r.stalled)
+        r = MixerMath.stallStep(processing: true, count: 0, progress: p, now: 101.1, threshold: 1)
+        XCTAssertTrue(r.stalled)
+        XCTAssertFalse(MixerMath.stallStep(processing: false, count: 0, progress: p, now: 200, threshold: 1).stalled)
+        // running for a while, then freezing at count 50
+        r = MixerMath.stallStep(processing: true, count: 50, progress: p, now: 150, threshold: 1)
+        XCTAssertFalse(r.stalled)
+        p = r.progress
+        XCTAssertEqual(p, MixerMath.StallProgress(count: 50, at: 150))
+        XCTAssertFalse(MixerMath.stallStep(processing: true, count: 50, progress: p, now: 150.9, threshold: 1).stalled)
+        XCTAssertTrue(MixerMath.stallStep(processing: true, count: 50, progress: p, now: 151.5, threshold: 1).stalled)
+        XCTAssertFalse(MixerMath.stallStep(processing: true, count: 51, progress: p, now: 151.5, threshold: 1).stalled)
+    }
 }
+

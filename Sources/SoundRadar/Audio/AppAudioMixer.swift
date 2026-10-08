@@ -21,6 +21,7 @@ final class AppAudioMixer: AudioMixing {
     private var channels: [pid_t: TapChannel] = [:]
     private var lastActive: [pid_t: TimeInterval] = [:]
     private var retryAfter: [pid_t: TimeInterval] = [:]
+    private var stallProgress: [pid_t: MixerMath.StallProgress] = [:]
     private var latest: [pid_t: Set<AudioObjectID>] = [:]
     private var smoothed: [pid_t: (value: Float, at: TimeInterval)] = [:]
     private var probeInFlight = false
@@ -43,6 +44,7 @@ final class AppAudioMixer: AudioMixing {
     func requestPermission() {
         defaults.set(true, forKey: Self.requestedKey)
         guard permission != .granted, !probeInFlight else { return }
+        if permission == .denied { openPrivacySettings() }
         guard let uid = DefaultOutput.uid() else { return }
         probeInFlight = true
         // Tap creation may block while macOS shows the prompt, so keep it off the main thread.
@@ -62,6 +64,15 @@ final class AppAudioMixer: AudioMixing {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self.finishProbe(failure: failure, gotCallback: gotCallback) }
             }
+        }
+    }
+
+    /// Opens System Settings at Privacy > System Audio Recording (falls back to Privacy).
+    func openPrivacySettings() {
+        let urls = ["x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture",
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy"]
+        for u in urls {
+            if let url = URL(string: u), NSWorkspace.shared.open(url) { return }
         }
     }
 
@@ -99,9 +110,11 @@ final class AppAudioMixer: AudioMixing {
         guard permission == .granted else { return }
 
         checkWatchdog(now: now)
+        // Processing channels of live processes keep their tap even when the app goes quiet.
+        let keepAlive = Set(channels.filter { $0.value.processing && Self.isAlive($0.key) }.keys)
         let plan = MixerMath.planChannels(
             current: channels.mapValues { $0.objects }, sources: wanted,
-            lastActive: lastActive, now: now, grace: Self.graceSeconds)
+            lastActive: lastActive, now: now, grace: Self.graceSeconds, keepAlive: keepAlive)
 
         for pid in plan.teardown {
             destroyChannel(pid)
@@ -125,6 +138,10 @@ final class AppAudioMixer: AudioMixing {
     /// Apps whose channel has entered processing mode; they stay there until torn down.
     private var processingPids = Set<pid_t>()
 
+    nonisolated static func isAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
     private func gain(for pid: pid_t) -> Float {
         MixerMath.targetGain(volume: volume(for: pid), muted: isMuted(pid))
     }
@@ -138,6 +155,7 @@ final class AppAudioMixer: AudioMixing {
         do {
             try ch.start(outputUID: uid)
             channels[pid] = ch
+            stallProgress[pid] = MixerMath.StallProgress(count: 0, at: ch.startedAt)
             retryAfter[pid] = nil
         } catch {
             // Never leave a half-built (possibly muting) tap behind: stop() unwinds everything.
@@ -150,6 +168,7 @@ final class AppAudioMixer: AudioMixing {
     private func destroyChannel(_ pid: pid_t) {
         channels.removeValue(forKey: pid)?.stop()
         smoothed[pid] = nil
+        stallProgress[pid] = nil
     }
 
     private func applySettings(_ pid: pid_t) {
@@ -164,13 +183,19 @@ final class AppAudioMixer: AudioMixing {
         }
     }
 
-    /// A muted tap whose render callback never runs would silence the app: drop it.
+    /// A muted tap whose render callback stops advancing would silence the app: drop it so the
+    /// app's own sound returns, and retry after a backoff.
     private func checkWatchdog(now: TimeInterval) {
-        for (pid, ch) in channels where ch.processing && now - ch.startedAt > Self.watchdogSeconds
-            && ch.state.callbackCount == 0 {
-            mixerLog.error("pid \(pid): muted tap produced no callbacks, destroying so sound is restored")
-            destroyChannel(pid)
-            retryAfter[pid] = now + 10
+        for (pid, ch) in channels {
+            let seen = stallProgress[pid] ?? MixerMath.StallProgress(count: 0, at: ch.startedAt)
+            let step = MixerMath.stallStep(processing: ch.processing, count: ch.state.callbackCount,
+                                           progress: seen, now: now, threshold: Self.watchdogSeconds)
+            stallProgress[pid] = step.progress
+            if step.stalled {
+                mixerLog.error("pid \(pid): muted tap stalled, destroying so sound is restored")
+                destroyChannel(pid)
+                retryAfter[pid] = now + 10
+            }
         }
     }
 

@@ -14,15 +14,18 @@ final class RTState: @unchecked Sendable {
     private let failedBuffers = Atomic<Int>(0)
     let processing: Bool
     /// Input buffers that belong to the output device itself (for example a headset mic).
-    /// The tap's buffers come after them; set before the IOProc starts, then read-only.
-    var inputSkip = 0
-    /// Per-sample gain smoothing coefficient from the real sample rate; set before the IOProc starts.
-    var rampCoefficient: Float = MixerMath.gainRampCoefficient
+    /// The tap's buffers come after them.
+    let inputSkip: Int
+    /// Per-sample gain smoothing coefficient from the real sample rate.
+    let rampCoefficient: Float
     /// Touched by the audio thread only.
     private var gain: Float
 
-    init(processing: Bool, target: Float) {
+    init(processing: Bool, target: Float, inputSkip: Int = 0,
+         rampCoefficient: Float = MixerMath.gainRampCoefficient) {
         self.processing = processing
+        self.inputSkip = inputSkip
+        self.rampCoefficient = rampCoefficient
         self.targetBits = Atomic<UInt32>(target.bitPattern)
         self.gain = target
     }
@@ -31,6 +34,18 @@ final class RTState: @unchecked Sendable {
     var callbackCount: Int { callbacks.load(ordering: .relaxed) }
     var badBufferCount: Int { failedBuffers.load(ordering: .relaxed) }
     func setTarget(_ g: Float) { targetBits.store(g.bitPattern, ordering: .relaxed) }
+
+    @inline(__always)
+    private func meter(_ ins: TapInputs, _ sumSq: inout Float, _ count: inout Int) {
+        var i = 0
+        while i < ins.count {
+            if let p = ins[i].mData?.assumingMemoryBound(to: Float.self) {
+                let n = Int(ins[i].mDataByteSize) / MemoryLayout<Float>.size
+                sumSq += MixerMath.sumOfSquares(p, count: n); count += n
+            }
+            i += 1
+        }
+    }
 
     /// Realtime entry point.
     func process(_ inData: UnsafePointer<AudioBufferList>?, _ outData: UnsafeMutablePointer<AudioBufferList>?) {
@@ -44,9 +59,12 @@ final class RTState: @unchecked Sendable {
         let skip = min(inputSkip, allIns?.count ?? 0)
         let inCount = (allIns?.count ?? 0) - skip
         let ins: TapInputs? = allIns.map { TapInputs(list: $0, skip: skip) }
+        let outCount = outs?.count ?? 0
 
         if processing, let outs {
-            for b in 0..<outs.count {
+            var b = 0
+            while b < outCount {
+                defer { b += 1 }
                 let ob = outs[b]
                 guard let optr = ob.mData?.assumingMemoryBound(to: Float.self), ob.mNumberChannels > 0 else { continue }
                 let outCh = Int(ob.mNumberChannels)
@@ -64,32 +82,26 @@ final class RTState: @unchecked Sendable {
                 if frames < outFrames {
                     memset(optr, 0, Int(ob.mDataByteSize))
                 }
+                // Fewer input buffers than mono output buffers: de-interleave, so output buffer b
+                // takes input channel b (clamped), not always the left channel.
+                let deinterleave = outCh == 1 && inCount < outCount
+                let offset = deinterleave ? min(b, inCh - 1) : 0
                 sumSq += MixerMath.render(input: iptr, inChannels: inCh, output: optr, outChannels: outCh,
                                           frames: frames, gain: &gain, target: target,
-                                          coefficient: rampCoefficient)
-                count += frames * inCh
+                                          coefficient: rampCoefficient, inOffset: offset)
+                count += deinterleave ? frames : frames * inCh
             }
-            if outs.count == 0, let ins {
-                for ib in ins {
-                    guard let p = ib.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    let n = Int(ib.mDataByteSize) / MemoryLayout<Float>.size
-                    sumSq += MixerMath.sumOfSquares(p, count: n); count += n
-                }
-            }
+            if outCount == 0, let ins { meter(ins, &sumSq, &count) }
         } else {
             if let outs {
-                for b in 0..<outs.count {
+                var b = 0
+                while b < outCount {
                     let ob = outs[b]
                     if let p = ob.mData { memset(p, 0, Int(ob.mDataByteSize)) }
+                    b += 1
                 }
             }
-            if let ins {
-                for ib in ins {
-                    guard let p = ib.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    let n = Int(ib.mDataByteSize) / MemoryLayout<Float>.size
-                    sumSq += MixerMath.sumOfSquares(p, count: n); count += n
-                }
-            }
+            if let ins { meter(ins, &sumSq, &count) }
         }
         let db = MixerMath.dBFS(sumSquares: sumSq, count: count)
         levelBits.store(db.bitPattern, ordering: .relaxed)
@@ -97,15 +109,12 @@ final class RTState: @unchecked Sendable {
 }
 
 /// The tap's input buffers only, skipping the output device's own inputs (never play a mic back).
-struct TapInputs: Sequence {
+/// Index access only: a Sequence conformance would allocate an iterator on the audio thread.
+struct TapInputs {
     let list: UnsafeMutableAudioBufferListPointer
     let skip: Int
     var count: Int { list.count - skip }
     subscript(i: Int) -> AudioBuffer { list[i + skip] }
-    func makeIterator() -> AnyIterator<AudioBuffer> {
-        var i = skip
-        return AnyIterator { guard i < list.count else { return nil }; defer { i += 1 }; return list[i] }
-    }
 }
 
 enum TapKind {
@@ -130,7 +139,9 @@ func fourCC(_ s: OSStatus) -> String {
 final class TapChannel: @unchecked Sendable {
     let kind: TapKind
     let objects: Set<AudioObjectID>
-    let state: RTState
+    /// Replaced in start() once the real input skip and sample rate are known.
+    private(set) var state: RTState
+    private let initialGain: Float
     let processing: Bool
     private(set) var startedAt: TimeInterval = 0
 
@@ -142,6 +153,7 @@ final class TapChannel: @unchecked Sendable {
     init(kind: TapKind, processing: Bool, gain: Float) {
         self.kind = kind
         self.processing = processing
+        self.initialGain = gain
         self.state = RTState(processing: processing, target: gain)
         if case .processes(let o) = kind { objects = Set(o) } else { objects = [] }
     }
@@ -179,9 +191,10 @@ final class TapChannel: @unchecked Sendable {
             throw MixerError(step: "CreateAggregateDevice", status: st)
         }
 
-        let rt = state
-        rt.inputSkip = Self.inputBufferCount(deviceUID: outputUID)
-        rt.rampCoefficient = MixerMath.gainRampCoefficient(sampleRate: Self.nominalSampleRate(aggregateID))
+        let rt = RTState(processing: processing, target: initialGain,
+                         inputSkip: Self.inputBufferCount(deviceUID: outputUID),
+                         rampCoefficient: MixerMath.gainRampCoefficient(sampleRate: Self.nominalSampleRate(aggregateID)))
+        state = rt
         st = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { _, inData, _, outData, _ in
             rt.process(inData, outData)
         }

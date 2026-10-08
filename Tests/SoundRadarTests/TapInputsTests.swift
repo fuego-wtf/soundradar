@@ -28,8 +28,7 @@ final class TapInputsTests: XCTestCase {
         let (ins, inPtrs) = makeList(inputs)
         let (outs, outPtrs) = makeList([7]) // sentinel proves the callback wrote the output
         defer { release(ins, inPtrs); release(outs, outPtrs) }
-        let rt = RTState(processing: true, target: 1)
-        rt.inputSkip = skip
+        let rt = RTState(processing: true, target: 1, inputSkip: skip)
         rt.process(UnsafePointer(ins.unsafePointer), outs.unsafeMutablePointer)
         return Array(UnsafeBufferPointer(start: outPtrs[0], count: frames * 2))
     }
@@ -51,8 +50,7 @@ final class TapInputsTests: XCTestCase {
         let (ins, inPtrs) = makeList([0.9, 0.4])
         let (outs, outPtrs) = makeList([7])
         defer { release(ins, inPtrs); release(outs, outPtrs) }
-        let rt = RTState(processing: true, target: 0.5)
-        rt.inputSkip = 1
+        let rt = RTState(processing: true, target: 0.5, inputSkip: 1)
         rt.process(UnsafePointer(ins.unsafePointer), outs.unsafeMutablePointer)
         XCTAssertEqual(outPtrs[0][10], 0.2, accuracy: 1e-6)
     }
@@ -62,7 +60,24 @@ final class TapInputsTests: XCTestCase {
         defer { release(list, ptrs) }
         let t = TapInputs(list: list, skip: 1)
         XCTAssertEqual(t.count, 2)
-        XCTAssertEqual(Array(t).count, 2)
         XCTAssertEqual(t[0].mData?.assumingMemoryBound(to: Float.self).pointee, 0.1)
+    }
+
+    func testTwoMonoOutputsDeinterleaveOneStereoInput() {
+        let inList = AudioBufferList.allocate(maximumBuffers: 1)
+        let inP = UnsafeMutablePointer<Float>.allocate(capacity: frames * 2)
+        for f in 0..<frames { inP[f * 2] = 0.2; inP[f * 2 + 1] = 0.6 }
+        inList[0] = AudioBuffer(mNumberChannels: 2, mDataByteSize: UInt32(frames * 2 * 4), mData: inP)
+        let outList = AudioBufferList.allocate(maximumBuffers: 2)
+        let outP = (0..<2).map { _ in UnsafeMutablePointer<Float>.allocate(capacity: frames) }
+        for (i, p) in outP.enumerated() {
+            p.initialize(repeating: 7, count: frames)
+            outList[i] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(frames * 4), mData: p)
+        }
+        defer { release(inList, [inP]); release(outList, outP) }
+        let rt = RTState(processing: true, target: 1)
+        rt.process(UnsafePointer(inList.unsafePointer), outList.unsafeMutablePointer)
+        XCTAssertEqual(outP[0][5], 0.2, accuracy: 1e-6)
+        XCTAssertEqual(outP[1][5], 0.6, accuracy: 1e-6)
     }
 }
